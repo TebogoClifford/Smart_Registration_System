@@ -46,9 +46,9 @@ app.get('/api/admin/migrate-heartbeat', async (req, res) => {
     res.json({ status: 'success', message: 'last_seen column added successfully' });
   } catch (err) {
     console.error('Migration error:', err);
-    res.status(500).json { status: 'error', message: err.message });
+    res.status(500).json ({ status: 'error', message: err.message });
   }
-});
+})
 
 app.use('/api/venues', venuesRouter);
 app.use('/api/devices', devicesRouter);
