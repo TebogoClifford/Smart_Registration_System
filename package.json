@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "chrome-devtools-mcp": "^1.10.1",
+    "puppeteer": "^25.12.0"
+  }
+}
