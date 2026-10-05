@@ -83,4 +83,17 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// POST /api/devices/heartbeat — update device last_seen
+router.post('/heartbeat', async (req, res) => {
+  const { deviceId } = req.body;
+  if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
+  try {
+    await pool.query('UPDATE devices SET last_seen = NOW() WHERE id = $1', [deviceId]);
+    res.json({ status: 'ok' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal server error' });
+  }
+});
+
 module.exports = router;

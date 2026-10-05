@@ -14,7 +14,6 @@ router.post('/', async (req, res) => {
   }
 
   try {
-    // Confirm the device exists before inserting (per design doc: "verify device exists")
     const deviceCheck = await pool.query('SELECT id FROM devices WHERE id = $1', [deviceId]);
     if (deviceCheck.rows.length === 0) {
       return res.status(404).json({ error: 'device not found' });
@@ -41,6 +40,36 @@ router.get('/', async (req, res) => {
        FROM access_events ORDER BY event_time DESC LIMIT 100`
     );
     res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'internal server error' });
+  }
+});
+
+// POST /api/access-events/:id/override — manual override by invigilator
+router.post('/:id/override', async (req, res) => {
+  const { id } = req.params;
+  const { invigilatorId, reason } = req.body;
+
+  if (!invigilatorId || !reason) {
+    return res.status(400).json({ error: 'invigilatorId and reason are required' });
+  }
+
+  try {
+    // 1. Verify event exists
+    const eventCheck = await pool.query('SELECT id FROM access_events WHERE id = $1', [id]);
+    if (eventCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'event not found' });
+    }
+
+    // 2. Log the override in the separate audit table
+    await pool.query(
+      `INSERT INTO event_overrides (event_id, invigilator_id, reason)
+       VALUES ($1, $2, $3)`,
+      [id, invigilatorId, reason]
+    );
+
+    res.json({ status: 'success', message: 'Entry override recorded' });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'internal server error' });
