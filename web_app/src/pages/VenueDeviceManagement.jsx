@@ -120,12 +120,8 @@ export default function VenueDeviceManagement() {
 
   return (
     <div className="mx-auto max-w-[1500px] space-y-6">
-      <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
-        <div>
-          <p className="mb-2 text-xs font-bold uppercase tracking-[0.18em] text-primary">System configuration</p>
-          <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">Venues &amp; Devices</h1>
-          <p className="mt-2 text-sm text-muted-foreground">Manage exam locations and the access devices installed at each venue.</p>
-        </div>
+      <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+        <p className="max-w-2xl text-sm text-muted-foreground">Manage exam locations and the access devices installed at each venue.</p>
         <Button variant="outline" onClick={loadData} disabled={loading} className="gap-2 self-start rounded-xl sm:self-auto">
           <RefreshCw size={15} className={loading ? 'animate-spin' : ''} /> Refresh data
         </Button>
@@ -161,7 +157,7 @@ export default function VenueDeviceManagement() {
 
       
       <div className="space-y-6">
-<div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1.7fr)_minmax(300px,1fr)]">
+<div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-2">
           <div className="min-w-0 space-y-5">
             <Card className="rounded-2xl shadow-sm">
               <CardHeader><CardTitle className="text-base">Add a venue</CardTitle></CardHeader>
