@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { api } from '@/lib/api';
-import { Plus, MapPin, Cpu, Search, RefreshCw } from 'lucide-react';
+import { Plus, MapPin, Cpu, Search, RefreshCw, Wifi, WifiOff, CircleHelp, Activity, Clock3 } from 'lucide-react';
 
 export default function VenueDeviceManagement() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -21,6 +21,8 @@ export default function VenueDeviceManagement() {
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deviceMetricsUpdatedAt, setDeviceMetricsUpdatedAt] = useState(null);
+  const [deviceMetricsError, setDeviceMetricsError] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -36,6 +38,35 @@ export default function VenueDeviceManagement() {
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refreshDeviceMetrics = async () => {
+      try {
+        const data = await api.getDevices();
+        if (!cancelled) {
+          setDevices(Array.isArray(data) ? data : []);
+          setDeviceMetricsUpdatedAt(new Date());
+          setDeviceMetricsError(false);
+        }
+      } catch (error) {
+        if (!cancelled) setDeviceMetricsError(true);
+      }
+    };
+    const timer = window.setInterval(refreshDeviceMetrics, 10000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, []);
+
+  const connectionState = (device) => {
+    const status = String(device.status ?? device.connection_status ?? device.connectionState ?? '').toLowerCase();
+    if (['online', 'connected', 'ready'].includes(status)) return 'online';
+    if (['offline', 'disconnected', 'unreachable'].includes(status)) return 'offline';
+    return 'unknown';
+  };
+
+  const onlineDevices = devices.filter((device) => connectionState(device) === 'online');
+  const offlineDevices = devices.filter((device) => connectionState(device) === 'offline');
+  const unknownDevices = devices.filter((device) => connectionState(device) === 'unknown');
 
   const handleAddVenue = async (event) => {
     event.preventDefault();
@@ -136,31 +167,105 @@ export default function VenueDeviceManagement() {
       </div>
 
       {activeTab === 'venues' ? (
-        <div className="space-y-5">
-          <Card className="rounded-2xl shadow-sm">
-            <CardHeader><CardTitle className="text-base">Add a venue</CardTitle></CardHeader>
-            <CardContent>
-              <form onSubmit={handleAddVenue} className="flex flex-col gap-3 sm:flex-row">
-                <Input aria-label="Venue name" placeholder="Venue name (e.g. Hall A)" value={venueName} onChange={(event) => setVenueName(event.target.value)} required className="h-11 rounded-xl" />
-                <Button type="submit" disabled={saving || !venueName.trim()} className="h-11 shrink-0 rounded-xl"><Plus size={16} className="mr-2" /> Add venue</Button>
-              </form>
-            </CardContent>
-          </Card>
-          <Card className="overflow-hidden rounded-2xl shadow-sm">
-            <CardHeader><CardTitle className="text-base">Venue directory</CardTitle></CardHeader>
-            <CardContent className="p-0">
-              {loading ? <p className="py-12 text-center text-sm text-muted-foreground">Loading venues...</p> : filteredVenues.length === 0 ? <p className="py-12 text-center text-sm text-muted-foreground">{venues.length ? 'No venues match your search.' : 'No venues registered yet. Add your first venue above.'}</p> : (
-                <div className="overflow-x-auto"><Table>
-                  <TableHeader><TableRow><TableHead className="pl-5">ID</TableHead><TableHead>Venue name</TableHead><TableHead>Devices</TableHead><TableHead>Created</TableHead><TableHead className="text-right pr-5">Action</TableHead></TableRow></TableHeader>
-                  <TableBody>{filteredVenues.map((venue) => <TableRow key={venue.id}>
-                    <TableCell className="pl-5 font-mono text-xs">{venue.id}</TableCell>
-                    <TableCell className="font-medium">{venue.name}</TableCell>
-                    <TableCell>{devices.filter((device) => String(device.venue_id) === String(venue.id)).length}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{venue.created_at && !Number.isNaN(new Date(venue.created_at).getTime()) ? new Date(venue.created_at).toLocaleDateString() : '—'}</TableCell>
-                    <TableCell className="pr-5 text-right"><Button variant="ghost" size="sm" onClick={() => navigate(`/venues/${venue.id}`)}>Manage</Button></TableCell>
-                  </TableRow>)}</TableBody>
-                </Table></div>
+        <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1.7fr)_minmax(320px,1fr)]">
+          <div className="min-w-0 space-y-5">
+            <Card className="rounded-2xl shadow-sm">
+              <CardHeader><CardTitle className="text-base">Add a venue</CardTitle></CardHeader>
+              <CardContent>
+                <form onSubmit={handleAddVenue} className="flex flex-col gap-3 sm:flex-row">
+                  <Input aria-label="Venue name" placeholder="Venue name (e.g. Hall A)" value={venueName} onChange={(event) => setVenueName(event.target.value)} required className="h-11 rounded-xl" />
+                  <Button type="submit" disabled={saving || !venueName.trim()} className="h-11 shrink-0 rounded-xl"><Plus size={16} className="mr-2" /> Add venue</Button>
+                </form>
+              </CardContent>
+            </Card>
+            <Card className="overflow-hidden rounded-2xl shadow-sm">
+              <CardHeader><CardTitle className="text-base">Venue directory</CardTitle></CardHeader>
+              <CardContent className="p-0">
+                {loading ? <p className="py-12 text-center text-sm text-muted-foreground">Loading venues...</p> : filteredVenues.length === 0 ? <p className="py-12 text-center text-sm text-muted-foreground">{venues.length ? 'No venues match your search.' : 'No venues registered yet. Add your first venue above.'}</p> : (
+                  <div className="overflow-x-auto"><Table>
+                    <TableHeader><TableRow><TableHead className="pl-5">ID</TableHead><TableHead>Venue name</TableHead><TableHead>Devices</TableHead><TableHead>Created</TableHead><TableHead className="text-right pr-5">Action</TableHead></TableRow></TableHeader>
+                    <TableBody>{filteredVenues.map((venue) => <TableRow key={venue.id}>
+                      <TableCell className="pl-5 font-mono text-xs">{venue.id}</TableCell>
+                      <TableCell className="font-medium">{venue.name}</TableCell>
+                      <TableCell>{devices.filter((device) => String(device.venue_id) === String(venue.id)).length}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{venue.created_at && !Number.isNaN(new Date(venue.created_at).getTime()) ? new Date(venue.created_at).toLocaleDateString() : '—'}</TableCell>
+                      <TableCell className="pr-5 text-right"><Button variant="ghost" size="sm" onClick={() => navigate('/venues/' + venue.id)}>Manage</Button></TableCell>
+                    </TableRow>)}</TableBody>
+                  </Table></div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          <Card className="overflow-hidden rounded-2xl border-slate-200 shadow-sm">
+            <CardHeader className="border-b bg-muted/20 pb-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <CardTitle className="flex items-center gap-2 text-base"><Activity size={18} className="text-primary" /> Connected devices</CardTitle>
+                  <p className="mt-1 text-xs text-muted-foreground">Device status reported by the system</p>
+                </div>
+                <span className="flex items-center gap-1.5 rounded-full border bg-background px-2.5 py-1 text-xs text-muted-foreground">
+                  <span className={'h-2 w-2 rounded-full ' + (deviceMetricsError ? 'bg-rose-500' : 'bg-emerald-500 animate-pulse')} />
+                  {deviceMetricsError ? 'Update issue' : 'Auto-refresh'}
+                </span>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-5 p-5">
+              <div className="grid grid-cols-3 gap-2">
+                <div className="rounded-xl border bg-emerald-50/70 p-3 dark:bg-emerald-950/20">
+                  <Wifi size={17} className="mb-2 text-emerald-600" />
+                  <p className="text-2xl font-bold tabular-nums">{onlineDevices.length}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Online</p>
+                </div>
+                <div className="rounded-xl border bg-rose-50/70 p-3 dark:bg-rose-950/20">
+                  <WifiOff size={17} className="mb-2 text-rose-600" />
+                  <p className="text-2xl font-bold tabular-nums">{offlineDevices.length}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Offline</p>
+                </div>
+                <div className="rounded-xl border bg-muted/40 p-3">
+                  <CircleHelp size={17} className="mb-2 text-muted-foreground" />
+                  <p className="text-2xl font-bold tabular-nums">{unknownDevices.length}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Unknown</p>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="text-sm font-semibold">Device status</h3>
+                <span className="text-xs text-muted-foreground">{devices.length} registered</span>
+              </div>
+              {devices.length === 0 ? (
+                <div className="rounded-xl border border-dashed px-4 py-8 text-center">
+                  <Cpu size={24} className="mx-auto mb-2 text-muted-foreground" />
+                  <p className="text-sm font-medium">No devices registered</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Add a device to see its reported status here.</p>
+                  <Button variant="outline" size="sm" onClick={() => switchTab('devices')} className="mt-4">Register a device</Button>
+                </div>
+              ) : (
+                <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+                  {devices.map((device) => {
+                    const state = connectionState(device);
+                    const venue = venues.find((item) => String(item.id) === String(device.venue_id));
+                    const reportedStatus = device.status ?? device.connection_status ?? 'Status unavailable';
+                    return (
+                      <button key={device.id} type="button" onClick={() => navigate('/devices/' + device.id)} className="flex w-full items-center gap-3 rounded-xl border p-3 text-left transition-colors hover:bg-muted/40">
+                        <span className={'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ' + (state === 'online' ? 'bg-emerald-100 text-emerald-700' : state === 'offline' ? 'bg-rose-100 text-rose-700' : 'bg-muted text-muted-foreground')}>
+                          {state === 'online' ? <Wifi size={17} /> : state === 'offline' ? <WifiOff size={17} /> : <CircleHelp size={17} />}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium">{device.name || ('Device ' + device.id)}</span>
+                          <span className="mt-0.5 block truncate text-xs text-muted-foreground">{venue?.name || 'Unassigned venue'} · {reportedStatus}</span>
+                        </span>
+                        <span className={'h-2 w-2 shrink-0 rounded-full ' + (state === 'online' ? 'bg-emerald-500' : state === 'offline' ? 'bg-rose-500' : 'bg-slate-300')} />
+                      </button>
+                    );
+                  })}
+                </div>
               )}
+              <div className="flex items-center gap-2 border-t pt-4 text-xs text-muted-foreground">
+                <Clock3 size={14} />
+                {deviceMetricsError ? 'Could not refresh device metrics.' : deviceMetricsUpdatedAt ? 'Last updated ' + deviceMetricsUpdatedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' · refreshes every 10s' : 'Loading live device status…'}
+              </div>
+              <p className="text-xs leading-relaxed text-muted-foreground">Online/offline counts use explicit connection statuses from the API. Devices without a connection status are shown as unknown.</p>
             </CardContent>
           </Card>
         </div>
