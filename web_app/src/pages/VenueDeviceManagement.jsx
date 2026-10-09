@@ -157,7 +157,7 @@ export default function VenueDeviceManagement() {
 
       
       <div className="space-y-6">
-<div className="grid grid-cols-1 items-start gap-5">
+<div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1.6fr)_minmax(320px,0.9fr)]">
           <div className="min-w-0 space-y-5">
             <Card className="rounded-2xl shadow-sm">
               <CardHeader><CardTitle className="text-base">Add a venue</CardTitle></CardHeader>
@@ -185,7 +185,40 @@ export default function VenueDeviceManagement() {
                 )}
               </CardContent>
             </Card>
-          </div>
+          <div id="device-management" className="space-y-5">
+          <Card className="rounded-2xl shadow-sm">
+            <CardHeader><CardTitle className="text-base">Register a device</CardTitle></CardHeader>
+            <CardContent>
+              <form onSubmit={handleAddDevice} className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(200px,1fr)_minmax(180px,0.8fr)_auto]">
+                <Input aria-label="Device name" placeholder="Device name (e.g. Entrance Cam 1)" value={deviceName} onChange={(event) => setDeviceName(event.target.value)} required className="h-11 rounded-xl" />
+                <select aria-label="Assign device to venue" className="h-11 w-full rounded-xl border border-input bg-background px-3 py-2 text-sm" value={venueId} onChange={(event) => setVenueId(event.target.value)} required>
+                  <option value="">Select venue</option>
+                  {venues.map((venue) => <option key={venue.id} value={venue.id}>{venue.name}</option>)}
+                </select>
+                <Button type="submit" disabled={saving || !deviceName.trim() || !venueId} className="h-11 rounded-xl"><Plus size={16} className="mr-2" /> Add device</Button>
+              </form>
+              {venues.length === 0 && <p className="mt-3 text-sm text-amber-700">Create a venue before registering a device.</p>}
+            </CardContent>
+          </Card>
+          <Card className="overflow-hidden rounded-2xl shadow-sm">
+            <CardHeader><CardTitle className="text-base">Device directory</CardTitle></CardHeader>
+            <CardContent className="p-0">
+              {loading ? <p className="py-12 text-center text-sm text-muted-foreground">Loading devices...</p> : filteredDevices.length === 0 ? <p className="py-12 text-center text-sm text-muted-foreground">{devices.length ? 'No devices match your search.' : 'No devices registered yet. Add your first device above.'}</p> : (
+                <div className="overflow-x-auto"><Table>
+                  <TableHeader><TableRow><TableHead className="pl-5">ID</TableHead><TableHead>Device name</TableHead><TableHead>Venue</TableHead><TableHead>Status</TableHead><TableHead className="text-right pr-5">Action</TableHead></TableRow></TableHeader>
+                  <TableBody>{filteredDevices.map((device) => <TableRow key={device.id}>
+                    <TableCell className="pl-5 font-mono text-xs">{device.id}</TableCell>
+                    <TableCell className="font-medium">{device.name}</TableCell>
+                    <TableCell>{venues.find((venue) => String(venue.id) === String(device.venue_id))?.name || 'Unknown venue'}</TableCell>
+                    <TableCell><Badge variant={String(device.status).toLowerCase() === 'active' ? 'default' : 'secondary'}>{device.status || 'Unknown'}</Badge></TableCell>
+                    <TableCell className="pr-5 text-right"><Button variant="ghost" size="sm" onClick={() => navigate(`/devices/${device.id}`)}>Manage</Button></TableCell>
+                  </TableRow>)}</TableBody>
+                </Table></div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+        </div>
 
           <Card className="overflow-hidden rounded-2xl border-slate-200 shadow-sm">
             <CardHeader className="border-b bg-muted/20 pb-4">
@@ -259,39 +292,7 @@ export default function VenueDeviceManagement() {
             </CardContent>
           </Card>
         </div>
-<div id="device-management" className="space-y-5">
-          <Card className="rounded-2xl shadow-sm">
-            <CardHeader><CardTitle className="text-base">Register a device</CardTitle></CardHeader>
-            <CardContent>
-              <form onSubmit={handleAddDevice} className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(200px,1fr)_minmax(180px,0.8fr)_auto]">
-                <Input aria-label="Device name" placeholder="Device name (e.g. Entrance Cam 1)" value={deviceName} onChange={(event) => setDeviceName(event.target.value)} required className="h-11 rounded-xl" />
-                <select aria-label="Assign device to venue" className="h-11 w-full rounded-xl border border-input bg-background px-3 py-2 text-sm" value={venueId} onChange={(event) => setVenueId(event.target.value)} required>
-                  <option value="">Select venue</option>
-                  {venues.map((venue) => <option key={venue.id} value={venue.id}>{venue.name}</option>)}
-                </select>
-                <Button type="submit" disabled={saving || !deviceName.trim() || !venueId} className="h-11 rounded-xl"><Plus size={16} className="mr-2" /> Add device</Button>
-              </form>
-              {venues.length === 0 && <p className="mt-3 text-sm text-amber-700">Create a venue before registering a device.</p>}
-            </CardContent>
-          </Card>
-          <Card className="overflow-hidden rounded-2xl shadow-sm">
-            <CardHeader><CardTitle className="text-base">Device directory</CardTitle></CardHeader>
-            <CardContent className="p-0">
-              {loading ? <p className="py-12 text-center text-sm text-muted-foreground">Loading devices...</p> : filteredDevices.length === 0 ? <p className="py-12 text-center text-sm text-muted-foreground">{devices.length ? 'No devices match your search.' : 'No devices registered yet. Add your first device above.'}</p> : (
-                <div className="overflow-x-auto"><Table>
-                  <TableHeader><TableRow><TableHead className="pl-5">ID</TableHead><TableHead>Device name</TableHead><TableHead>Venue</TableHead><TableHead>Status</TableHead><TableHead className="text-right pr-5">Action</TableHead></TableRow></TableHeader>
-                  <TableBody>{filteredDevices.map((device) => <TableRow key={device.id}>
-                    <TableCell className="pl-5 font-mono text-xs">{device.id}</TableCell>
-                    <TableCell className="font-medium">{device.name}</TableCell>
-                    <TableCell>{venues.find((venue) => String(venue.id) === String(device.venue_id))?.name || 'Unknown venue'}</TableCell>
-                    <TableCell><Badge variant={String(device.status).toLowerCase() === 'active' ? 'default' : 'secondary'}>{device.status || 'Unknown'}</Badge></TableCell>
-                    <TableCell className="pr-5 text-right"><Button variant="ghost" size="sm" onClick={() => navigate(`/devices/${device.id}`)}>Manage</Button></TableCell>
-                  </TableRow>)}</TableBody>
-                </Table></div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+
       </div>
     </div>
   );
