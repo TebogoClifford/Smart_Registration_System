@@ -28,8 +28,10 @@ export default function VenueDeviceManagement() {
     setLoading(true);
     try {
       const [venueData, deviceData] = await Promise.all([api.getVenues(), api.getDevices()]);
-      setVenues(Array.isArray(venueData) ? venueData : []);
-      setDevices(Array.isArray(deviceData) ? deviceData : []);
+      const venueList = Array.isArray(venueData) ? venueData : Array.isArray(venueData?.venues) ? venueData.venues : Array.isArray(venueData?.data) ? venueData.data : [];
+      const deviceList = Array.isArray(deviceData) ? deviceData : Array.isArray(deviceData?.devices) ? deviceData.devices : Array.isArray(deviceData?.data) ? deviceData.data : [];
+      setVenues(venueList);
+      setDevices(deviceList);
     } catch (error) {
       toast.error('Failed to load venues and devices');
     } finally {
@@ -43,9 +45,11 @@ export default function VenueDeviceManagement() {
     let cancelled = false;
     const refreshDeviceMetrics = async () => {
       try {
-        const data = await api.getDevices();
+        const response = await api.getDevices();
+        const data = Array.isArray(response) ? response : Array.isArray(response?.devices) ? response.devices : Array.isArray(response?.data) ? response.data : null;
+        if (!data) throw new Error('Unexpected device API response');
         if (!cancelled) {
-          setDevices(Array.isArray(data) ? data : []);
+          setDevices(data);
           setDeviceMetricsUpdatedAt(new Date());
           setDeviceMetricsError(false);
         }
@@ -53,14 +57,18 @@ export default function VenueDeviceManagement() {
         if (!cancelled) setDeviceMetricsError(true);
       }
     };
+    refreshDeviceMetrics();
     const timer = window.setInterval(refreshDeviceMetrics, 10000);
     return () => { cancelled = true; window.clearInterval(timer); };
   }, []);
 
   const connectionState = (device) => {
-    const status = String(device.status ?? device.connection_status ?? device.connectionState ?? '').toLowerCase();
-    if (['online', 'connected', 'ready'].includes(status)) return 'online';
-    if (['offline', 'disconnected', 'unreachable'].includes(status)) return 'offline';
+    const rawStatus = device.connection_status ?? device.connectionState ?? device.status ?? device.connection_state ?? '';
+    const status = String(rawStatus).trim().toLowerCase().replace(/[ _]+/g, '-');
+    if (device.is_online === true || device.is_connected === true || device.connected === true) return 'online';
+    if (device.is_online === false || device.is_connected === false || device.connected === false) return 'offline';
+    if (['online', 'connected', 'ready', 'active', 'operational', 'healthy'].includes(status)) return 'online';
+    if (['offline', 'disconnected', 'unreachable', 'inactive', 'error', 'failed'].includes(status)) return 'offline';
     return 'unknown';
   };
 
@@ -167,7 +175,7 @@ export default function VenueDeviceManagement() {
       </div>
 
       {activeTab === 'venues' ? (
-        <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1.7fr)_minmax(320px,1fr)]">
+        <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1.7fr)_minmax(300px,1fr)]">
           <div className="min-w-0 space-y-5">
             <Card className="rounded-2xl shadow-sm">
               <CardHeader><CardTitle className="text-base">Add a venue</CardTitle></CardHeader>
@@ -265,7 +273,7 @@ export default function VenueDeviceManagement() {
                 <Clock3 size={14} />
                 {deviceMetricsError ? 'Could not refresh device metrics.' : deviceMetricsUpdatedAt ? 'Last updated ' + deviceMetricsUpdatedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' · refreshes every 10s' : 'Loading live device status…'}
               </div>
-              <p className="text-xs leading-relaxed text-muted-foreground">Online/offline counts use explicit connection statuses from the API. Devices without a connection status are shown as unknown.</p>
+              <p className="text-xs leading-relaxed text-muted-foreground">Metrics refresh from the devices API every 10 seconds. Status values such as active/operational count as online; devices without a recognized status remain unknown.</p>
             </CardContent>
           </Card>
         </div>
