@@ -4,7 +4,7 @@ const pool = require('../db');
 
 // POST /api/venues — create a venue
 router.post('/', async (req, res) => {
-  const { name } = req.body;
+  const { name } = (req.body ?? {});
   if (!name) {
     return res.status(400).json({ error: 'name is required' });
   }
@@ -34,7 +34,7 @@ router.get('/', async (req, res) => {
 // PUT /api/venues/:id — edit a venue's name
 router.put('/:id', async (req, res) => {
   const { id } = req.params;
-  const { name } = req.body;
+  const { name } = (req.body ?? {});
   if (!name) return res.status(400).json({ error: 'name is required' });
   try {
     const result = await pool.query(
