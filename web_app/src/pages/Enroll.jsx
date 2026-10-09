@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -45,39 +45,50 @@ export default function Enroll() {
   const [errors, setErrors] = useState({});
   const navigate = useNavigate();
 
-  useEffect(() => {
-    loadInitialData();
-    loadRecentEnrollments();
+  const loadInitialData = useCallback(async () => {
+    try {
+      const [venueData, deviceData] = await Promise.all([api.getVenues(), api.getDevices()]);
+      setVenues(Array.isArray(venueData) ? venueData : []);
+      setDevices(Array.isArray(deviceData) ? deviceData : []);
+    } catch (err) {
+      console.error('Failed to load enrollment configuration:', err);
+      toast.error('Could not load venues and devices. Refresh the page to try again.');
+    }
+  }, []);
+
+  const loadRecentEnrollments = useCallback(async ({ showLoader = false } = {}) => {
+    if (showLoader) setIsLoadingRecent(true);
+    try {
+      const data = await api.getStudents();
+      const students = Array.isArray(data) ? data : [];
+      const sorted = [...students].sort((a, b) => {
+        const aId = Number(a.id);
+        const bId = Number(b.id);
+        if (Number.isFinite(aId) && Number.isFinite(bId)) return bId - aId;
+        return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime();
+      });
+      setRecentEnrollments(sorted.slice(0, 5));
+    } catch (err) {
+      console.error('Failed to load recent enrollments:', err);
+      toast.error('Could not refresh the recent enrolments list.');
+    } finally {
+      if (showLoader) setIsLoadingRecent(false);
+    }
   }, []);
 
   useEffect(() => {
-    if (venues.length > 0 && venueId) {
-      const filtered = devices.filter(d => String(d.venue_id) === venueId);
-      setFilteredDevices(filtered);
-    }
-  }, [venueId, devices, venues]);
+    loadInitialData();
+    loadRecentEnrollments({ showLoader: true });
+    // Refresh the persisted list so recently added students do not disappear
+    // when the backend has just finished processing a request.
+    const refreshTimer = window.setInterval(() => loadRecentEnrollments(), 15000);
+    return () => window.clearInterval(refreshTimer);
+  }, [loadInitialData, loadRecentEnrollments]);
 
-  const loadInitialData = async () => {
-    try {
-      const [v, d] = await Promise.all([api.getVenues(), api.getDevices()]);
-      setVenues(v);
-      setDevices(d);
-    } catch (err) {
-      toast.error('Failed to load configuration');
-    }
-  };
-
-  const loadRecentEnrollments = async () => {
-    setIsLoadingRecent(true);
-    try {
-      const data = await api.getStudents();
-      setRecentEnrollments([...data].sort((a, b) => b.id - a.id).slice(0, 5));
-    } catch (err) {
-      console.error('Failed to load recent enrollments');
-    } finally {
-      setIsLoadingRecent(false);
-    }
-  };
+  const filteredDevices = useMemo(
+    () => devices.filter((device) => String(device.venue_id) === String(venueId)),
+    [devices, venueId]
+  );
 
   const validate = () => {
     const newErrors = {};
@@ -97,8 +108,10 @@ export default function Enroll() {
 
     setLoading(true);
     try {
-      await api.createStudent(studentNumber, name, Number(deviceId));
-      toast.success('Student initialized. Device is now in capture mode!');
+      await api.createStudent(studentNumber.trim(), name.trim(), Number(deviceId));
+      // Reload from the API after saving so the recent list reflects persisted data.
+      await loadRecentEnrollments();
+      toast.success('Student record saved. The device can now begin capture.');
       setStep(2);
       setCaptureState('capturing');
     } catch (err) {
@@ -175,7 +188,7 @@ export default function Enroll() {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <label className="text-sm font-medium">Venue</label>
-                      <Select value={venueId} onValueChange={setVenueId}>
+                      <Select value={venueId} onValueChange={(value) => { setVenueId(value); setDeviceId(''); setErrors((current) => ({ ...current, venueId: '', deviceId: '' })); }}>
                         <SelectTrigger className={errors.venueId ? 'border-red-500' : ''}>
                           <SelectValue placeholder="Select Venue" />
                         </SelectTrigger>
@@ -206,15 +219,6 @@ export default function Enroll() {
                       )}
                     </div>
                   </div>
-
-                  {deviceId && (
-                    <div className="flex items-center gap-2 py-2">
-                      <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200 flex items-center gap-1">
-                        <span className="w-1.5 h-1.5 rounded-full bg-green-600 animate-pulse" />
-                        Online · Last seen 12s ago
-                      </Badge>
-                    </div>
-                  )}
 
                   <div className="p-3 bg-primary/5 border border-primary/10 rounded-lg space-y-3">
                     <div className="flex items-start gap-3">
