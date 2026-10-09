@@ -157,7 +157,7 @@ export default function VenueDeviceManagement() {
 
       
       <div className="space-y-6">
-<div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-2">
+<div className="grid grid-cols-1 items-start gap-5">
           <div className="min-w-0 space-y-5">
             <Card className="rounded-2xl shadow-sm">
               <CardHeader><CardTitle className="text-base">Add a venue</CardTitle></CardHeader>
