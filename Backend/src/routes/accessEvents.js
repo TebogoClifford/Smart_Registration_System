@@ -4,7 +4,7 @@ const pool = require('../db');
 
 // POST /api/access-events — device reports an access decision
 router.post('/', async (req, res) => {
-  const { deviceId, studentId, decision, timestamp } = req.body;
+  const { deviceId, studentId, decision, timestamp } = (req.body ?? {});
 
   if (!deviceId || !decision) {
     return res.status(400).json({ error: 'deviceId and decision are required' });
@@ -49,7 +49,7 @@ router.get('/', async (req, res) => {
 // POST /api/access-events/:id/override — manual override by invigilator
 router.post('/:id/override', async (req, res) => {
   const { id } = req.params;
-  const { invigilatorId, reason } = req.body;
+  const { invigilatorId, reason } = (req.body ?? {});
 
   if (!invigilatorId || !reason) {
     return res.status(400).json({ error: 'invigilatorId and reason are required' });
