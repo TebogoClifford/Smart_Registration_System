@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -10,9 +10,7 @@ import { api } from '@/lib/api';
 import { Plus, MapPin, Cpu, Search, RefreshCw, Wifi, WifiOff, CircleHelp, Activity, Clock3 } from 'lucide-react';
 
 export default function VenueDeviceManagement() {
-  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
-  const activeTab = searchParams.get('tab') === 'devices' ? 'devices' : 'venues';
   const [venues, setVenues] = useState([]);
   const [devices, setDevices] = useState([]);
   const [venueName, setVenueName] = useState('');
@@ -120,11 +118,6 @@ export default function VenueDeviceManagement() {
       .some((value) => String(value ?? '').toLowerCase().includes(search.toLowerCase()))
   );
 
-  const switchTab = (tab) => {
-    setSearch('');
-    setSearchParams(tab === 'venues' ? {} : { tab });
-  };
-
   return (
     <div className="mx-auto max-w-[1500px] space-y-6">
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
@@ -160,22 +153,15 @@ export default function VenueDeviceManagement() {
       </div>
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="inline-flex w-fit rounded-xl border bg-muted/40 p-1" role="tablist" aria-label="Venue and device management">
-          <button type="button" role="tab" aria-selected={activeTab === 'venues'} onClick={() => switchTab('venues')} className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition ${activeTab === 'venues' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>
-            <MapPin size={16} /> Venues <span className="rounded-full bg-muted px-2 py-0.5 text-xs">{venues.length}</span>
-          </button>
-          <button type="button" role="tab" aria-selected={activeTab === 'devices'} onClick={() => switchTab('devices')} className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition ${activeTab === 'devices' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>
-            <Cpu size={16} /> Devices <span className="rounded-full bg-muted px-2 py-0.5 text-xs">{devices.length}</span>
-          </button>
-        </div>
         <div className="relative w-full sm:max-w-xs">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-          <Input aria-label={activeTab === 'venues' ? 'Search venues' : 'Search devices'} placeholder={activeTab === 'venues' ? 'Search venues...' : 'Search devices or venues...'} value={search} onChange={(event) => setSearch(event.target.value)} className="pl-9" />
+          <Input aria-label="Search venues and devices" placeholder="Search venues and devices..." value={search} onChange={(event) => setSearch(event.target.value)} className="pl-9" />
         </div>
       </div>
 
-      {activeTab === 'venues' ? (
-        <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1.7fr)_minmax(300px,1fr)]">
+      
+      <div className="space-y-6">
+<div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1.7fr)_minmax(300px,1fr)]">
           <div className="min-w-0 space-y-5">
             <Card className="rounded-2xl shadow-sm">
               <CardHeader><CardTitle className="text-base">Add a venue</CardTitle></CardHeader>
@@ -246,7 +232,7 @@ export default function VenueDeviceManagement() {
                   <Cpu size={24} className="mx-auto mb-2 text-muted-foreground" />
                   <p className="text-sm font-medium">No devices registered</p>
                   <p className="mt-1 text-xs text-muted-foreground">Add a device to see its reported status here.</p>
-                  <Button variant="outline" size="sm" onClick={() => switchTab('devices')} className="mt-4">Register a device</Button>
+                  <Button variant="outline" size="sm" onClick={() => document.getElementById('device-management')?.scrollIntoView({ behavior: 'smooth' })} className="mt-4">Register a device</Button>
                 </div>
               ) : (
                 <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
@@ -277,8 +263,7 @@ export default function VenueDeviceManagement() {
             </CardContent>
           </Card>
         </div>
-      ) : (
-        <div className="space-y-5">
+<div id="device-management" className="space-y-5">
           <Card className="rounded-2xl shadow-sm">
             <CardHeader><CardTitle className="text-base">Register a device</CardTitle></CardHeader>
             <CardContent>
@@ -311,7 +296,7 @@ export default function VenueDeviceManagement() {
             </CardContent>
           </Card>
         </div>
-      )}
+      </div>
     </div>
   );
 }
