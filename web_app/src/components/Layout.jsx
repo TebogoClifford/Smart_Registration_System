@@ -15,17 +15,17 @@ export default function Layout() {
     { path: '/', label: 'Dashboard', icon: <LayoutDashboard size={20} /> },
     { path: '/venues', label: 'Venues & Devices', icon: <MapPin size={20} /> },
     { path: '/students', label: 'Students', icon: <Users size={20} /> },
-    { path: '/enroll', label: 'Enroll', icon: <UserPlus size={20} /> },
+    { path: '/enroll', label: 'Enrollment', icon: <UserPlus size={20} /> },
   ];
 
   return (
     <div className="flex min-h-screen bg-background text-foreground">
-      <aside className="flex w-64 flex-col border-r bg-card">
+      <aside className="sticky top-0 flex h-screen w-64 shrink-0 flex-col border-r bg-card">
         <div className="border-b p-6">
           <h1 className="text-xl font-bold tracking-tight">SRS Console</h1>
           <p className="text-xs text-muted-foreground">{mockUser.role} Access</p>
         </div>
-        <nav className="flex-1 space-y-1 p-4" aria-label="Main navigation">
+        <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto p-4" aria-label="Main navigation">
           {navItems.map((item) => {
             const isActive = item.path === '/'
               ? location.pathname === '/'
@@ -34,7 +34,7 @@ export default function Layout() {
                 : location.pathname === item.path || location.pathname.startsWith(`${item.path}/`);
             return (
               <Link key={item.path} to={item.path}
-                className={`flex h-[44px] items-center gap-3 rounded-md px-3 py-2 transition-all duration-200 ${isActive
+                className={`flex h-[44px] shrink-0 items-center gap-3 rounded-md px-3 py-2 transition-all duration-200 ${isActive
                   ? 'rounded-l-none border-l-4 border-primary bg-primary/10 font-bold text-primary'
                   : 'text-muted-foreground hover:bg-accent hover:text-foreground'}`}>
                 {item.icon}<span className="text-sm">{item.label}</span>
