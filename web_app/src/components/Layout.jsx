@@ -20,9 +20,10 @@ function BrandMark({ small = false }) {
   return (
     <span className={`brand-mark ${small ? 'brand-mark-small' : ''}`} aria-hidden="true">
       <svg viewBox="0 0 48 48" fill="none" role="presentation">
-        <path d="M24 3.5 41 10v12.3c0 10.2-6.9 17.8-17 22.2C13.9 40.1 7 32.5 7 22.3V10L24 3.5Z" fill="currentColor" fillOpacity=".16" />
-        <path d="M24 7.5 37 12.4v9.8c0 7.8-5.1 14.1-13 17.9-7.9-3.8-13-10.1-13-17.9v-9.8L24 7.5Z" stroke="currentColor" strokeWidth="2.5" />
-        <path d="m16.8 23.8 4.6 4.6 9.8-10" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round" />
+        <rect x="3" y="3" width="42" height="42" rx="12" fill="#102A43" />
+        <path d="M15.2 17.1c0-2.1 1.8-3.7 4.3-3.7h9.2c2.3 0 4.1 1.3 4.1 3.4v1.1h-4.4v-.5c0-.5-.4-.8-1-.8h-6.8c-.6 0-1 .3-1 .8v1.1c0 .5.4.8 1 .8h7.7c2.8 0 4.5 1.7 4.5 4.2v3.4c0 2.2-1.8 3.8-4.4 3.8h-9.3c-2.5 0-4.2-1.4-4.2-3.6v-1h4.4v.4c0 .6.4.9 1 .9h6.9c.6 0 1-.3 1-.9v-1.2c0-.5-.4-.8-1-.8h-7.7c-2.7 0-4.3-1.7-4.3-4.2v-3.2Z" fill="#FFFFFF"/>
+        <path d="M33.5 29.5 37 33l6-7" stroke="#39C6D6" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M7 12h4M7 17h2" stroke="#39C6D6" strokeWidth="2" strokeLinecap="round" />
       </svg>
     </span>
   );
