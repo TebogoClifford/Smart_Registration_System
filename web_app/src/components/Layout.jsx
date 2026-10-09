@@ -20,9 +20,22 @@ function BrandMark({ small = false }) {
   return (
     <span className={`brand-mark ${small ? 'brand-mark-small' : ''}`} aria-hidden="true">
       <svg viewBox="0 0 48 48" fill="none" role="presentation">
-        <path d="M24 3.5 41 10v12.3c0 10.2-6.9 17.8-17 22.2C13.9 40.1 7 32.5 7 22.3V10L24 3.5Z" fill="currentColor" fillOpacity=".16" />
-        <path d="M24 7.5 37 12.4v9.8c0 7.8-5.1 14.1-13 17.9-7.9-3.8-13-10.1-13-17.9v-9.8L24 7.5Z" stroke="currentColor" strokeWidth="2.5" />
-        <path d="m16.8 23.8 4.6 4.6 9.8-10" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round" />
+        <defs>
+          <linearGradient id="srs-brand-gradient" x1="5" y1="5" x2="43" y2="44" gradientUnits="userSpaceOnUse">
+            <stop stopColor="#38BDF8" />
+            <stop offset="1" stopColor="#1D4ED8" />
+          </linearGradient>
+        </defs>
+        <path d="M24 3.5 41 10v12.3c0 10.2-6.9 17.8-17 22.2C13.9 40.1 7 32.5 7 22.3V10L24 3.5Z" fill="url(#srs-brand-gradient)" fillOpacity=".16" />
+        <path d="M24 5.5 39 11v11.2c0 9.2-6.1 16.2-15 20.1-8.9-3.9-15-10.9-15-20.1V11L24 5.5Z" stroke="url(#srs-brand-gradient)" strokeWidth="2.3" />
+        <path d="M15.5 17.5c0-1.1.9-2 2-2h12.8c1.1 0 2 .9 2 2v12.8c0 1.1-.9 2-2 2H17.5c-1.1 0-2-.9-2-2V17.5Z" fill="white" fillOpacity=".94" />
+        <circle cx="21" cy="21" r="2.5" fill="#2563EB" />
+        <path d="M17.8 27c.6-2 1.7-3 3.2-3s2.6 1 3.2 3" stroke="#2563EB" strokeWidth="1.6" strokeLinecap="round" />
+        <path d="M26.5 20h3.2M26.5 23.5h3.2M18.2 29.5h11.5" stroke="#0F4CBB" strokeWidth="1.5" strokeLinecap="round" />
+        <circle cx="33.8" cy="32.2" r="7.2" fill="#0F4CBB" stroke="white" strokeWidth="1.5" />
+        <path d="m30.5 32.1 2.2 2.2 4.4-4.7" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="m15.2 10.3 8.8-4 8.8 4-8.8 4-8.8-4Z" fill="#38BDF8" stroke="white" strokeWidth=".8" strokeLinejoin="round" />
+        <path d="M18.2 11.7v2.1c2.7 2 8.9 2 11.6 0v-2.1" stroke="#38BDF8" strokeWidth="1.2" strokeLinecap="round" />
       </svg>
     </span>
   );
