@@ -4,7 +4,7 @@ const pool = require('../db');
 
 // POST /api/students — start enrollment (status defaults to 'pending')
 router.post('/', async (req, res) => {
-  const { student_number, name, device_id } = req.body;
+  const { student_number, name, device_id } = (req.body ?? {});
   if (!student_number || !name || !device_id) {
     return res
       .status(400)
@@ -49,7 +49,7 @@ router.get('/:id', async (req, res) => {
 // PUT /api/students/:id — edit name/number/device assignment
 router.put('/:id', async (req, res) => {
   const { id } = req.params;
-  const { student_number, name, device_id } = req.body;
+  const { student_number, name, device_id } = (req.body ?? {});
   if (!student_number || !name || !device_id) {
     return res.status(400).json({ error: 'student_number, name, and device_id are required' });
   }

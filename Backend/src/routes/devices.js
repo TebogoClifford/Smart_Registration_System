@@ -5,7 +5,7 @@ const crypto = require('crypto');
 
 // POST /api/devices — register a device against a venue
 router.post('/', async (req, res) => {
-  const { venue_id, name } = req.body;
+  const { venue_id, name } = (req.body ?? {});
   if (!venue_id || !name) {
     return res.status(400).json({ error: 'venue_id and name are required' });
   }
@@ -49,7 +49,7 @@ router.get('/:id', async (req, res) => {
 // PUT /api/devices/:id — edit name/venue assignment
 router.put('/:id', async (req, res) => {
   const { id } = req.params;
-  const { name, venue_id } = req.body;
+  const { name, venue_id } = (req.body ?? {});
   if (!name || !venue_id) return res.status(400).json({ error: 'name and venue_id are required' });
   try {
     const result = await pool.query(
@@ -85,7 +85,7 @@ router.delete('/:id', async (req, res) => {
 
 // POST /api/devices/heartbeat — update device last_seen
 router.post('/heartbeat', async (req, res) => {
-  const { deviceId } = req.body;
+  const { deviceId } = (req.body ?? {});
   if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
   try {
     await pool.query('UPDATE devices SET last_seen = NOW() WHERE id = $1', [deviceId]);
