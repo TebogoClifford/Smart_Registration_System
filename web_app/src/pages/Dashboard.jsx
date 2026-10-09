@@ -13,7 +13,7 @@ const localDate = (date = new Date()) => {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 };
 
 function StatusIndicator({ status }) {
@@ -83,24 +83,28 @@ export default function Dashboard() {
   const fetchEvents = useCallback(async (manual = false) => {
     if (manual) setRefreshing(true);
     try {
-      const [eventData, studentData] = await Promise.all([
-        api.getAccessEvents(),
-        studentCount === null ? api.getStudents() : Promise.resolve(null),
-      ]);
-      setEvents(Array.isArray(eventData) ? eventData : []);
-      if (Array.isArray(studentData)) setStudentCount(studentData.length);
+      const data = await api.getAccessEvents();
+      setEvents(Array.isArray(data) ? data : []);
       setConnectionStatus('live');
       setLastUpdated(Date.now());
       setErrorMessage('');
     } catch (error) {
-      console.error('Failed to refresh dashboard:', error);
+      console.error('Failed to refresh access events:', error);
       setConnectionStatus('offline');
-      setErrorMessage('Unable to refresh dashboard data. Check your connection and try again.');
+      setErrorMessage('Unable to refresh access events. Check your connection and try again.');
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [studentCount]);
+
+    // The student count is supplementary: a failure here should not hide access events.
+    try {
+      const students = await api.getStudents();
+      if (Array.isArray(students)) setStudentCount(students.length);
+    } catch (error) {
+      console.error('Failed to load registered student count:', error);
+    }
+  }, []);
 
   useEffect(() => {
     fetchEvents();
@@ -145,7 +149,7 @@ export default function Dashboard() {
     document.body.appendChild(link);
     link.click();
     link.remove();
-    URL.revokeObjectURL(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   const decisionBadge = (decision) => {
