@@ -38,7 +38,6 @@ export default function Enroll() {
   // Data State
   const [venues, setVenues] = useState([]);
   const [devices, setDevices] = useState([]);
-  const [filteredDevices, setFilteredDevices] = useState([]);
   const [recentEnrollments, setRecentEnrollments] = useState([]);
   const [isLoadingRecent, setIsLoadingRecent] = useState(true);
 
