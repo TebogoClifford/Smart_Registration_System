@@ -170,7 +170,16 @@ export default function Dashboard() {
   const fetchDashboard = useCallback(async (manual = false) => {
     if (manual) setRefreshing(true);
     try {
-      const data = await api.getAccessEvents();
+      // Ask the server for the selected local day (the API only returns the latest 100 otherwise)
+      const params = { limit: 500 };
+      if (dateFilter) {
+        const start = new Date(`${dateFilter}T00:00:00`);
+        const end = new Date(start);
+        end.setDate(end.getDate() + 1);
+        params.from = start.toISOString();
+        params.to = end.toISOString();
+      }
+      const data = await api.getAccessEvents(params);
       setEvents(Array.isArray(data) ? data.map(normalizeEvent) : []);
       setConnectionStatus('live');
       setLastUpdated(Date.now());
@@ -193,7 +202,7 @@ export default function Dashboard() {
       console.error('Failed to load dashboard analytics:', error);
       setStatsWarning('Analytics could not be refreshed. Showing available event data where possible.');
     }
-  }, []);
+  }, [dateFilter]);
 
   useEffect(() => {
     fetchDashboard();

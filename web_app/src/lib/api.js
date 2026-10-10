@@ -1,6 +1,7 @@
 import axios from 'axios';
 
-const API_BASE_URL = 'https://smart-registration-system.onrender.com';
+// Set VITE_API_BASE_URL in .env.local to point the app at a local backend; defaults to the Render deployment.
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://smart-registration-system.onrender.com';
 
 const api = {
   async getDevices() {
@@ -81,8 +82,9 @@ const api = {
     const response = await axios.delete(`${API_BASE_URL}/api/students/${id}`);
     return response.data;
   },
-  async getAccessEvents() {
-    const response = await axios.get(`${API_BASE_URL}/api/access-events`);
+  // params (optional): { from, to, limit } — ISO timestamps; see GET /api/access-events
+  async getAccessEvents(params = {}) {
+    const response = await axios.get(`${API_BASE_URL}/api/access-events`, { params });
     return response.data;
   },
   async overrideEvent(eventId, invigilatorId, reason) {
