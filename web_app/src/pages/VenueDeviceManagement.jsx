@@ -79,7 +79,7 @@ export default function VenueDeviceManagement() {
     if (!venueName.trim()) return;
     setSaving(true);
     try {
-      await api.createVenue(venueName.trim());
+      await api.createVenue({ name: venueName.trim() });
       toast.success('Venue created');
       setVenueName('');
       await loadData();
