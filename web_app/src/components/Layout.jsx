@@ -58,7 +58,7 @@ export default function Layout() {
   return (
     <div className="app-shell">
       <aside className="app-sidebar">
-        <Link to="/" className="brand-lockup" aria-label="SRS Console home">
+        <Link to="/" className="brand-lockup" aria-label="SRS Console SMART REGISTRATION home">
           <BrandMark />
           <span className="min-w-0">
             <span className="brand-name">SRS <span>Console</span></span>
@@ -93,7 +93,7 @@ export default function Layout() {
 
       <div className="app-main-column">
         <header className="mobile-brand-bar">
-          <Link to="/" className="brand-lockup" aria-label="SRS Console home">
+          <Link to="/" className="brand-lockup" aria-label="SRS Console SMART REGISTRATION home">
             <BrandMark small />
             <span className="min-w-0">
               <span className="brand-name">SRS <span>Console</span></span>

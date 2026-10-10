@@ -218,7 +218,7 @@ export default function VenueDeviceManagement() {
             </CardContent>
           </Card>
         </div>
-        </div>
+          </div>
 
           <Card className="overflow-hidden rounded-2xl border-slate-200 shadow-sm">
             <CardHeader className="border-b bg-muted/20 pb-4">
