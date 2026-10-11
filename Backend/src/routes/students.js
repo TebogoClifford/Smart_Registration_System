@@ -24,8 +24,8 @@ router.post('/', async (req, res) => {
       return res.status(409).json({ error: 'this student number is already registered on that device' });
     }
     const result = await pool.query(
-      `INSERT INTO students (student_number, name, device_id, enrollment_status)
-       VALUES ($1, $2, $3, 'pending') RETURNING *`,
+      `INSERT INTO students (student_number, name, device_id, enrollment_status, enrollment_requested_at)
+       VALUES ($1, $2, $3, 'pending', NOW()) RETURNING *`,
       [student_number, name, device_id]
     );
     res.status(201).json(result.rows[0]);
@@ -77,6 +77,22 @@ router.put('/:id', async (req, res) => {
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'student not found' });
     res.json(result.rows[0]);
+  } catch (err) {
+    handleDbError(res, err);
+  }
+});
+
+// POST /api/students/:id/re-enroll — ask the device to capture this student again
+// (after a failed capture, or to replace a poor one). The device picks it up on its next poll.
+router.post('/:id/re-enroll', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `UPDATE students SET enrollment_status = 'pending', enrollment_requested_at = NOW()
+       WHERE id = $1 RETURNING *`,
+      [req.params.id]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'student not found' });
+    res.json(rows[0]);
   } catch (err) {
     handleDbError(res, err);
   }

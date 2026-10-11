@@ -2,7 +2,10 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 const crypto = require('crypto');
-const { validateIdParam, isId, handleDbError, keyMatches, LIVE_STATUS } = require('../http');
+const { validateIdParam, isId, handleDbError, LIVE_STATUS } = require('../http');
+const { requireDevice } = require('../deviceAuth');
+
+const BATCH_MAX = 100; // keep in step with routes/accessEvents.js
 
 router.param('id', validateIdParam);
 
@@ -98,20 +101,63 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// POST /api/devices/heartbeat — device reports it is alive.
-// Requires the device's api_key in the X-Device-Key header (design: shared secret on each request).
-router.post('/heartbeat', async (req, res) => {
-  const { deviceId } = (req.body ?? {});
-  if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
-  if (!isId(deviceId)) return res.status(400).json({ error: 'deviceId must be a positive integer' });
+// POST /api/devices/heartbeat — device reports it is alive (also refreshed by every other device call).
+// Needs deviceId in the body and the device's key in the X-Device-Key header.
+router.post('/heartbeat', requireDevice, (req, res) => {
+  res.json({ status: 'ok', serverTime: new Date().toISOString() });
+});
+
+// ---------- device-facing endpoints (authenticated with X-Device-Key, see deviceAuth.js) ----------
+const envInt = (name, fallback) => {
+  const n = parseInt(process.env[name], 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+};
+
+// GET /api/devices/:id/config — settings the device reads at boot, so they can be tuned
+// from the server without re-flashing firmware.
+router.get('/:id/config', requireDevice, (req, res) => {
+  res.json({
+    deviceId: req.device.id,
+    name: req.device.name,
+    venueId: req.device.venue_id,
+    captureDistanceCm: envInt('DEVICE_CAPTURE_DISTANCE_CM', 30),
+    heartbeatIntervalSeconds: envInt('DEVICE_HEARTBEAT_SECONDS', 30),
+    enrollmentPollSeconds: envInt('DEVICE_ENROLL_POLL_SECONDS', 3),
+    eventBatchMax: BATCH_MAX,
+    serverTime: new Date().toISOString(),
+  });
+});
+
+// GET /api/devices/:id/pending-enrollments — students an invigilator has asked this device to
+// capture. The device polls this (the design is HTTP-only, so the server cannot push).
+// Requests older than ENROLL_REQUEST_TTL_SECONDS (default 10 min) are ignored as abandoned.
+router.get('/:id/pending-enrollments', requireDevice, async (req, res) => {
   try {
-    const device = await pool.query('SELECT id, api_key FROM devices WHERE id = $1', [deviceId]);
-    if (device.rows.length === 0) return res.status(404).json({ error: 'device not found' });
-    if (!keyMatches(req.get('X-Device-Key'), device.rows[0].api_key)) {
-      return res.status(401).json({ error: 'invalid or missing device key' });
-    }
-    await pool.query('UPDATE devices SET last_seen = NOW() WHERE id = $1', [deviceId]);
-    res.json({ status: 'ok' });
+    const { rows } = await pool.query(
+      `SELECT id AS "studentId", student_number AS "studentNumber", name
+       FROM students
+       WHERE device_id = $1 AND enrollment_status = 'pending'
+         AND enrollment_requested_at > NOW() - make_interval(secs => $2)
+       ORDER BY enrollment_requested_at, id`,
+      [req.device.id, envInt('ENROLL_REQUEST_TTL_SECONDS', 600)]
+    );
+    res.json(rows);
+  } catch (err) {
+    handleDbError(res, err);
+  }
+});
+
+// GET /api/devices/:id/roster — students currently enrolled on this device. Face data lives on the
+// device, so it compares this list with its stored faces and deletes any that are no longer listed
+// (for example after a student record was removed in the web app).
+router.get('/:id/roster', requireDevice, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id AS "studentId", student_number AS "studentNumber", name
+       FROM students WHERE device_id = $1 AND enrollment_status = 'enrolled' ORDER BY id`,
+      [req.device.id]
+    );
+    res.json(rows);
   } catch (err) {
     handleDbError(res, err);
   }
