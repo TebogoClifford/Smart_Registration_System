@@ -32,6 +32,55 @@ const STATEMENTS = [
 
   // --- device API: when enrollment was requested, so abandoned requests expire
   `ALTER TABLE students ADD COLUMN IF NOT EXISTS enrollment_requested_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()`,
+  // --- roles: 'admin' manages venues/devices/accounts; 'invigilator' runs enrolment and exam bookings
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'invigilator'`,
+
+  // --- venue capacity (0 = not set yet; a venue with no capacity cannot be booked)
+  `ALTER TABLE venues ADD COLUMN IF NOT EXISTS capacity INTEGER NOT NULL DEFAULT 0 CHECK (capacity >= 0)`,
+
+  // --- one enrolment photo per student, kept so the device can be re-enrolled (embeddings stay on the device)
+  `ALTER TABLE students ADD COLUMN IF NOT EXISTS enrollment_image BYTEA`,
+  `ALTER TABLE students ADD COLUMN IF NOT EXISTS enrollment_image_type VARCHAR(30)`,
+
+  // --- course and modules
+  `ALTER TABLE students ADD COLUMN IF NOT EXISTS course_name VARCHAR(100)`,
+  `CREATE TABLE IF NOT EXISTS modules (
+     id SERIAL PRIMARY KEY,
+     code VARCHAR(20) NOT NULL UNIQUE,
+     name VARCHAR(100) NOT NULL,
+     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+   )`,
+  `CREATE TABLE IF NOT EXISTS student_modules (
+     student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+     module_id INTEGER NOT NULL REFERENCES modules(id) ON DELETE CASCADE,
+     PRIMARY KEY (student_id, module_id)
+   )`,
+  `CREATE INDEX IF NOT EXISTS idx_student_modules_module ON student_modules (module_id)`,
+
+  // --- exam bookings: one module, in one venue, on one date, in one of the two slots
+  `CREATE TABLE IF NOT EXISTS exam_bookings (
+     id SERIAL PRIMARY KEY,
+     module_id INTEGER NOT NULL REFERENCES modules(id) ON DELETE CASCADE,
+     venue_id INTEGER NOT NULL REFERENCES venues(id),
+     exam_date DATE NOT NULL,
+     slot CHAR(5) NOT NULL CHECK (slot IN ('09:00', '13:00')),
+     booked_by VARCHAR(255),
+     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+     UNIQUE (module_id, exam_date, slot)
+   )`,
+  // a reserved seat; venue/date/slot are copied from the booking so the database itself
+  // guarantees one seat number per person-place and one seat per student per session
+  `CREATE TABLE IF NOT EXISTS seat_reservations (
+     booking_id INTEGER NOT NULL REFERENCES exam_bookings(id) ON DELETE CASCADE,
+     student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+     venue_id INTEGER NOT NULL,
+     exam_date DATE NOT NULL,
+     slot CHAR(5) NOT NULL,
+     seat_number INTEGER NOT NULL CHECK (seat_number > 0),
+     PRIMARY KEY (booking_id, student_id),
+     UNIQUE (venue_id, exam_date, slot, seat_number),
+     UNIQUE (student_id, exam_date, slot)
+   )`,
 ];
 
 async function ensureSchema() {

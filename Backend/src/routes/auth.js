@@ -19,7 +19,7 @@ router.post('/login', async (req, res) => {
     return res.status(429).json({ error: 'too many failed attempts, try again in 15 minutes' });
   }
   try {
-    const { rows } = await pool.query('SELECT id, email, name, password_hash FROM users WHERE email = $1', [email]);
+    const { rows } = await pool.query('SELECT id, email, name, role, password_hash FROM users WHERE email = $1', [email]);
     const user = rows[0];
     // always run one hash comparison, even for unknown emails (see getDummyHash)
     const ok = await auth.verifyPassword(password, user ? user.password_hash : await auth.getDummyHash());
@@ -28,7 +28,7 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ error: 'incorrect email or password' });
     }
     auth.clearFailures(key);
-    const safe = { id: user.id, email: user.email, name: user.name };
+    const safe = { id: user.id, email: user.email, name: user.name, role: user.role };
     res.json({ token: auth.signToken(safe), user: safe });
   } catch (err) {
     handleDbError(res, err);

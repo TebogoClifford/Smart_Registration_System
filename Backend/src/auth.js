@@ -45,7 +45,7 @@ const getDummyHash = async () => (dummyHash ??= await hashPassword(crypto.random
 
 // ---------- tokens ----------
 const signToken = (user) =>
-  jwt.sign({ sub: user.id, email: user.email, name: user.name }, SECRET, { algorithm: 'HS256', expiresIn: `${TOKEN_HOURS}h` });
+  jwt.sign({ sub: user.id, email: user.email, name: user.name, role: user.role }, SECRET, { algorithm: 'HS256', expiresIn: `${TOKEN_HOURS}h` });
 
 // ---------- login throttle: 5 failures / 15 min per (ip, email) ----------
 const attempts = new Map();
@@ -70,10 +70,11 @@ const clearFailures = (key) => attempts.delete(key);
 // the device key (X-Device-Key), which each route checks itself.
 const DEVICE_ROUTES = [
   ['POST', /^\/devices\/heartbeat$/],
-  ['GET', /^\/devices\/\d+\/(config|pending-enrollments|roster)$/],
+  ['GET', /^\/devices\/\d+\/(config|pending-enrollments|roster|session)$/],
   ['POST', /^\/access-events$/],
   ['POST', /^\/access-events\/batch$/],
   ['PUT', /^\/students\/\d+\/enrollment$/],
+  ['PUT', /^\/students\/\d+\/enrollment-image$/],
 ];
 const PUBLIC_ROUTES = [
   ['POST', /^\/auth\/login$/],
@@ -91,7 +92,7 @@ async function gate(req, res, next) {
   try {
     const claims = jwt.verify(token, SECRET, { algorithms: ['HS256'] });
     // look the user up each time so deleting an account takes effect immediately
-    const { rows } = await pool.query('SELECT id, email, name FROM users WHERE id = $1', [claims.sub]);
+    const { rows } = await pool.query('SELECT id, email, name, role FROM users WHERE id = $1', [claims.sub]);
     if (rows.length === 0) return res.status(401).json({ error: 'account no longer exists' });
     req.user = rows[0];
     next();
@@ -101,6 +102,13 @@ async function gate(req, res, next) {
     }
     next(err);
   }
+}
+
+// With sign-in off (no JWT_SECRET) everyone counts as admin, so nothing changes until it is switched on.
+const isAdmin = (req) => !authEnabled || req.user?.role === 'admin';
+function requireAdmin(req, res, next) {
+  if (isAdmin(req)) return next();
+  res.status(403).json({ error: 'only an administrator can do that' });
 }
 
 // Create the first account from ADMIN_EMAIL / ADMIN_PASSWORD when the users table is empty.
@@ -117,12 +125,12 @@ async function seedAdmin() {
     console.warn('⚠️  Sign-in is on but there are no accounts. Set ADMIN_EMAIL and ADMIN_PASSWORD (8+ chars) and restart.');
     return;
   }
-  await pool.query('INSERT INTO users (email, name, password_hash) VALUES ($1, $2, $3) ON CONFLICT (email) DO NOTHING',
+  await pool.query('INSERT INTO users (email, name, password_hash, role) VALUES ($1, $2, $3, \'admin\') ON CONFLICT (email) DO NOTHING',
     [email, 'Administrator', await hashPassword(password)]);
   console.log(`✅ Created first account: ${email}`);
 }
 
 module.exports = {
-  authEnabled, hashPassword, verifyPassword, getDummyHash, signToken,
+  authEnabled, isAdmin, requireAdmin, hashPassword, verifyPassword, getDummyHash, signToken,
   throttleKey, isThrottled, recordFailure, clearFailures, gate, seedAdmin,
 };

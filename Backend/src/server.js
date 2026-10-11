@@ -12,6 +12,8 @@ const accessEventsRouter = require('./routes/accessEvents');
 const statsRouter = require('./routes/stats');
 const authRouter = require('./routes/auth');
 const usersRouter = require('./routes/users');
+const modulesRouter = require('./routes/modules');
+const bookingsRouter = require('./routes/bookings');
 
 const app = express();
 app.set('trust proxy', 1); // Render sits behind a proxy; this makes req.ip the real client address
@@ -37,11 +39,12 @@ app.use('/api/venues', venuesRouter);
 app.use('/api/devices', devicesRouter);
 app.use('/api/students', studentsRouter);
 app.use('/api/access-events', accessEventsRouter);
+app.use('/api/modules', modulesRouter);
+app.use('/api/bookings', bookingsRouter);
 app.use('/api/stats', statsRouter);
 
 // Unknown routes -> JSON 404; unexpected errors (e.g. malformed JSON body) -> JSON, never an HTML stack trace
 app.use((req, res) => res.status(404).json({ error: 'not found' }));
-// eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
   if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'invalid JSON body' });
   if (err.type === 'entity.too.large') return res.status(413).json({ error: 'request body too large' });
@@ -63,7 +66,11 @@ async function start() {
     }
   }
   const PORT = process.env.PORT || 3000;
-  app.listen(PORT, () => console.log(`Backend listening on port ${PORT}`));
+  const server = app.listen(PORT, (err) => {
+    if (err) { console.error(`Could not listen on port ${PORT}:`, err.message); process.exit(1); }
+    console.log(`Backend listening on port ${PORT}`);
+  });
+  server.on('error', (err) => { console.error('Server error:', err.message); process.exit(1); });
 }
 
 start();
