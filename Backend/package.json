@@ -7,7 +7,7 @@
     "test": "node --test",
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "migrate": "node src/migrate_heartbeat.js && node src/migrate_overrides.js",
+    "migrate": "node src/migrate.js",
     "lint": "eslint src test"
   },
   "keywords": [],

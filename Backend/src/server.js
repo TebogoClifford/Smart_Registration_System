@@ -3,6 +3,7 @@ const cors = require('cors');
 require('dotenv').config();
 
 const { trimBody } = require('./http');
+const { ensureSchema } = require('./schema');
 const venuesRouter = require('./routes/venues');
 const devicesRouter = require('./routes/devices');
 const studentsRouter = require('./routes/students');
@@ -34,7 +35,25 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'internal server error' });
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Backend listening on port ${PORT}`);
-});
+// Bring the database up to date (Neon may take a few seconds to wake up), then start listening.
+async function start() {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await ensureSchema();
+      break;
+    } catch (err) {
+      if (attempt >= 5) { console.error('Could not prepare the database:', err); process.exit(1); }
+      console.warn(`Database not ready (attempt ${attempt}/5): ${err.message}`);
+      await new Promise((r) => setTimeout(r, 2000 * attempt));
+    }
+  }
+  const PORT = process.env.PORT || 3000;
+  // Express 5 passes a startup error (e.g. port already in use) to this callback instead of throwing,
+  // so check it, otherwise the log would say "listening" while nothing is.
+  app.listen(PORT, (err) => {
+    if (err) { console.error(`Could not listen on port ${PORT}:`, err); process.exit(1); }
+    console.log(`Backend listening on port ${PORT}`);
+  });
+}
+
+start();
