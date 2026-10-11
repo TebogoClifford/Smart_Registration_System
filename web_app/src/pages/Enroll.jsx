@@ -31,6 +31,7 @@ export default function Enroll() {
   // Form State
   const [studentNumber, setStudentNumber] = useState('');
   const [name, setName] = useState('');
+  const [courseName, setCourseName] = useState('');
   const [venueId, setVenueId] = useState('');
   const [deviceId, setDeviceId] = useState('');
   const [consent, setConsent] = useState(false);
@@ -106,7 +107,7 @@ export default function Enroll() {
 
     setLoading(true);
     try {
-      await api.createStudent(studentNumber.trim(), name.trim(), Number(deviceId));
+      await api.createStudent(studentNumber.trim(), name.trim(), Number(deviceId), courseName.trim());
       // Reload from the API after saving so the recent list reflects persisted data.
       await loadRecentEnrollments();
       toast.success('Student record saved. The device can now begin capture.');
@@ -123,6 +124,7 @@ export default function Enroll() {
     setStep(1);
     setStudentNumber('');
     setName('');
+    setCourseName('');
     setVenueId('');
     setDeviceId('');
     setConsent(false);
@@ -181,6 +183,17 @@ export default function Enroll() {
                         <AlertCircle size={12} /> {errors.name}
                       </p>
                     )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <label htmlFor="course-name" className="text-sm font-medium">Course name <span className="font-normal text-muted-foreground">(optional)</span></label>
+                    <Input
+                      id="course-name"
+                      value={courseName}
+                      onChange={(e) => setCourseName(e.target.value)}
+                      placeholder="e.g. National Diploma: Information Technology"
+                    />
+                    <p className="text-xs text-muted-foreground">Modules are assigned afterwards on the student's page or under Modules.</p>
                   </div>
 
                   <div className="grid grid-cols-2 gap-4">
