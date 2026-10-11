@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -16,7 +16,7 @@ export default function VenueDetail() {
   const [name, setName] = useState('');
   const [devices, setDevices] = useState([]);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       const venues = await api.getVenues();
       const found = venues.find((v) => String(v.id) === id);
@@ -30,12 +30,12 @@ export default function VenueDetail() {
 
       const allDevices = await api.getDevices();
       setDevices(allDevices.filter((d) => String(d.venue_id) === id));
-    } catch (err) {
+    } catch {
       toast.error('Failed to load venue details');
     }
-  };
+  }, [id, navigate]);
 
-  useEffect(() => { load(); }, [id]);
+  useEffect(() => { load(); }, [load]);
 
   const handleSave = async () => {
     try {

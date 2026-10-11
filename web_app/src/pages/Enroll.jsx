@@ -1,5 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -43,7 +42,6 @@ export default function Enroll() {
   const [isLoadingRecent, setIsLoadingRecent] = useState(true);
 
   const [errors, setErrors] = useState({});
-  const navigate = useNavigate();
 
   const loadInitialData = useCallback(async () => {
     try {
@@ -188,7 +186,7 @@ export default function Enroll() {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <label className="text-sm font-medium">Venue</label>
-                      <Select value={venueId} onValueChange={(value) => { setVenueId(value); setDeviceId(''); setErrors((current) => ({ ...current, venueId: '', deviceId: '' })); }}>
+                      <Select value={venueId} items={venues.map((v) => ({ value: String(v.id), label: v.name }))} onValueChange={(value) => { setVenueId(value); setDeviceId(''); setErrors((current) => ({ ...current, venueId: '', deviceId: '' })); }}>
                         <SelectTrigger className={errors.venueId ? 'border-red-500' : ''}>
                           <SelectValue placeholder="Select Venue" />
                         </SelectTrigger>
@@ -204,7 +202,7 @@ export default function Enroll() {
                     </div>
                     <div className="space-y-2">
                       <label className="text-sm font-medium">Device</label>
-                      <Select value={deviceId} onValueChange={setDeviceId}>
+                      <Select value={deviceId} onValueChange={setDeviceId} items={filteredDevices.map((d) => ({ value: String(d.id), label: d.name }))}>
                         <SelectTrigger className={errors.deviceId ? 'border-red-500' : ''}>
                           <SelectValue placeholder="Select Device" />
                         </SelectTrigger>

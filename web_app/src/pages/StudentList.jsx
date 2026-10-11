@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { api } from '@/lib/api';
@@ -67,7 +67,7 @@ export default function StudentList() {
 }
 
 // Simple internal Button component for the table to avoid import errors if Button wasn't global
-function Button({ children, variant, size, onClick }) {
+function Button({ children, variant, onClick }) {
   return (
     <button
       onClick={onClick}

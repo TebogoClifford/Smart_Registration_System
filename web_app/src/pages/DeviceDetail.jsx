@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -21,7 +21,7 @@ export default function DeviceDetail() {
   const [students, setStudents] = useState([]);
   const [showKey, setShowKey] = useState(false);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       const d = await api.getDevice(id);
       setDevice(d);
@@ -33,12 +33,12 @@ export default function DeviceDetail() {
 
       const sList = await api.getStudents();
       setStudents(sList.filter((s) => String(s.device_id) === id));
-    } catch (err) {
+    } catch {
       toast.error('Failed to load device details');
     }
-  };
+  }, [id]);
 
-  useEffect(() => { load(); }, [id]);
+  useEffect(() => { load(); }, [load]);
 
   const handleSave = async () => {
     try {
@@ -79,7 +79,7 @@ export default function DeviceDetail() {
           </div>
           <div className="space-y-2">
             <label className="text-sm font-medium">Assigned Venue</label>
-            <Select value={venueId} onValueChange={setVenueId}>
+            <Select value={venueId} onValueChange={setVenueId} items={venues.map((v) => ({ value: String(v.id), label: v.name }))}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 {venues.map((v) => (
