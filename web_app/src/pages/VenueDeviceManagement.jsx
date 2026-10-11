@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -30,7 +30,7 @@ export default function VenueDeviceManagement() {
       const deviceList = Array.isArray(deviceData) ? deviceData : Array.isArray(deviceData?.devices) ? deviceData.devices : Array.isArray(deviceData?.data) ? deviceData.data : [];
       setVenues(venueList);
       setDevices(deviceList);
-    } catch (error) {
+    } catch {
       toast.error('Failed to load venues and devices');
     } finally {
       setLoading(false);
@@ -51,7 +51,7 @@ export default function VenueDeviceManagement() {
           setDeviceMetricsUpdatedAt(new Date());
           setDeviceMetricsError(false);
         }
-      } catch (error) {
+      } catch {
         if (!cancelled) setDeviceMetricsError(true);
       }
     };

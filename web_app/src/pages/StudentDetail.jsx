@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -18,7 +18,7 @@ export default function StudentDetail() {
   const [name, setName] = useState('');
   const [deviceId, setDeviceId] = useState('');
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       const s = await api.getStudent(id);
       setStudent(s);
@@ -28,12 +28,12 @@ export default function StudentDetail() {
 
       const dList = await api.getDevices();
       setDevices(dList);
-    } catch (err) {
+    } catch {
       toast.error('Failed to load student details');
     }
-  };
+  }, [id]);
 
-  useEffect(() => { load(); }, [id]);
+  useEffect(() => { load(); }, [load]);
 
   const handleSave = async () => {
     try {
@@ -78,7 +78,7 @@ export default function StudentDetail() {
           </div>
           <div className="space-y-2">
             <label className="text-sm font-medium">Assigned Device</label>
-            <Select value={deviceId} onValueChange={setDeviceId}>
+            <Select value={deviceId} onValueChange={setDeviceId} items={devices.map((d) => ({ value: String(d.id), label: d.name }))}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 {devices.map((d) => (

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -160,7 +160,7 @@ export default function Dashboard() {
   const [refreshing, setRefreshing] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState('reconnecting');
   const [lastUpdated, setLastUpdated] = useState(null);
-  const [clock, setClock] = useState(Date.now());
+  const [clock, setClock] = useState(() => Date.now());
   const [decisionFilter, setDecisionFilter] = useState('all');
   const [dateFilter, setDateFilter] = useState(localDate());
   const [searchTerm, setSearchTerm] = useState('');

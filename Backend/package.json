@@ -7,7 +7,8 @@
     "test": "node --test",
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
-    "migrate": "node src/migrate_heartbeat.js && node src/migrate_overrides.js"
+    "migrate": "node src/migrate_heartbeat.js && node src/migrate_overrides.js",
+    "lint": "eslint src test"
   },
   "keywords": [],
   "author": "",
@@ -20,7 +21,9 @@
     "pg": "^8.23.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "eslint": "^10.10.0",
+    "globals": "^17.13.0",
     "nodemon": "^3.1.14"
   }
 }
