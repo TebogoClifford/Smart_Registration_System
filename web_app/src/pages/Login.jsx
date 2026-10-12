@@ -6,6 +6,13 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useAuth } from '@/lib/auth';
 import { ShieldCheck, Loader2 } from 'lucide-react';
 
+// Only for the demo build: one click fills in the seeded demo accounts (see Backend/tools/seed-demo.js).
+const DEMO = import.meta.env.VITE_DEMO === 'true';
+const DEMO_ACCOUNTS = [
+  { label: 'Administrator', email: 'admin@demo.local', password: 'Admin#2026' },
+  { label: 'Invigilator', email: 'nomsa@demo.local', password: 'Invigilator#2026' },
+];
+
 export default function Login() {
   const { login } = useAuth();
   const [email, setEmail] = useState('');
@@ -47,6 +54,17 @@ export default function Login() {
             </Button>
             <p className="text-center text-xs text-muted-foreground">Accounts are created by an administrator.</p>
           </form>
+          {DEMO && (
+            <div className="mt-4 space-y-2 rounded-md border border-dashed p-3 text-xs" data-testid="demo-accounts">
+              <p className="font-semibold">Demo accounts (build with VITE_DEMO=true)</p>
+              {DEMO_ACCOUNTS.map((a) => (
+                <button key={a.email} type="button" className="block w-full rounded border px-2 py-1 text-left hover:bg-muted"
+                  onClick={() => { setEmail(a.email); setPassword(a.password); }}>
+                  {a.label} · {a.email}
+                </button>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>
