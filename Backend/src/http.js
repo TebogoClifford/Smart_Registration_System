@@ -26,6 +26,9 @@ function trimBody(req, res, next) {
 
 // Map known Postgres errors to client errors; anything else is a real 500.
 function handleDbError(res, err) {
+  if (err.name === 'HttpError') { // HttpError from bookings.js: a deliberate, user-facing refusal
+    return res.status(err.status).json({ error: err.message, ...(err.extra || {}) });
+  }
   if (err.code === '23503') { // foreign_key_violation
     return res.status(400).json({ error: 'a referenced venue, device or student does not exist' });
   }

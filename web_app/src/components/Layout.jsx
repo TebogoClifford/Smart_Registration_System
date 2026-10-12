@@ -1,18 +1,18 @@
 import { Link, Outlet, useLocation } from 'react-router-dom';
-import { LayoutDashboard, MapPin, Users, UserPlus, LogOut, ShieldCheck, ChevronRight, Sparkles } from 'lucide-react';
+import { LayoutDashboard, MapPin, Users, UserPlus, LogOut, ShieldCheck, ChevronRight, Sparkles, BookOpen, CalendarCheck, KeyRound } from 'lucide-react';
+import { useAuth } from '@/lib/auth';
 
-const mockUser = {
-  name: 'Teboho M.',
-  initials: 'TM',
-  role: 'Invigilator',
-  version: 'v1.1.0-beta',
-};
+const VERSION = 'v1.2.0-beta';
+const initialsOf = (name = '') => name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?';
 
-const navItems = [
+const allNavItems = [
   { path: '/', label: 'Dashboard', icon: LayoutDashboard },
   { path: '/venues', label: 'Venues & Devices', icon: MapPin },
   { path: '/students', label: 'Students', icon: Users },
   { path: '/enroll', label: 'Enrollment', icon: UserPlus },
+  { path: '/modules', label: 'Modules', icon: BookOpen },
+  { path: '/bookings', label: 'Exam Bookings', icon: CalendarCheck },
+  { path: '/users', label: 'Accounts', icon: KeyRound, adminOnly: true },
 ];
 
 function BrandMark({ small = false }) {
@@ -30,6 +30,9 @@ function BrandMark({ small = false }) {
 
 export default function Layout() {
   const location = useLocation();
+  const { user, isAdmin, authRequired, logout } = useAuth();
+  const navItems = allNavItems.filter((item) => !item.adminOnly || isAdmin);
+  const roleLabel = user?.role === 'admin' ? 'Administrator' : 'Invigilator';
   const currentPage = navItems.find((item) => item.path === '/'
     ? location.pathname === '/'
     : item.path === '/venues'
@@ -77,16 +80,18 @@ export default function Layout() {
             <p className="mt-1 text-xs leading-relaxed text-slate-500">Manage access, venues and enrolments from one place.</p>
           </div>
           <div className="user-card">
-            <div className="user-avatar">{mockUser.initials}</div>
+            <div className="user-avatar">{initialsOf(user?.name)}</div>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold text-slate-800">{mockUser.name}</p>
-              <p className="text-xs text-slate-500">{mockUser.role}</p>
+              <p className="truncate text-sm font-semibold text-slate-800">{user?.name}</p>
+              <p className="text-xs text-slate-500">{roleLabel}</p>
             </div>
-            <button type="button" className="signout-button" aria-label="Sign out">
-              <LogOut size={16} />
-            </button>
+            {authRequired && (
+              <button type="button" className="signout-button" aria-label="Sign out" onClick={logout}>
+                <LogOut size={16} />
+              </button>
+            )}
           </div>
-          <p className="version-label">{mockUser.version} · Secure workspace</p>
+          <p className="version-label">{VERSION} · Secure workspace</p>
         </div>
       </aside>
 
@@ -99,7 +104,7 @@ export default function Layout() {
               <span className="brand-caption">SMART REGISTRATION</span>
             </span>
           </Link>
-          <span className="mobile-user-avatar">{mockUser.initials}</span>
+          <span className="mobile-user-avatar">{initialsOf(user?.name)}</span>
         </header>
 
         <nav className="mobile-nav" aria-label="Mobile navigation">
@@ -112,7 +117,7 @@ export default function Layout() {
               <p className="page-eyebrow">REGISTRATION MANAGEMENT</p>
               <h1 className="page-shell-title">{currentPage.label}</h1>
             </div>
-            <div className="secure-pill"><ShieldCheck size={15} /> <span>Admin workspace</span></div>
+            <div className="secure-pill"><ShieldCheck size={15} /> <span>{roleLabel} workspace</span></div>
           </div>
           <Outlet />
           <footer className="app-footer">

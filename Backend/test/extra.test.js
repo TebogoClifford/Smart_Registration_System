@@ -19,7 +19,7 @@ const ctx = {};
 const key = () => ({ 'X-Device-Key': ctx.dev.api_key });
 
 test('setup: venue, two devices, two students', async () => {
-  ctx.venue = (await call('POST', '/api/venues', { name: 'Extra Hall' })).json;
+  ctx.venue = (await call('POST', '/api/venues', { name: 'Extra Hall', capacity: 50 })).json;
   ctx.dev = (await call('POST', '/api/devices', { venue_id: ctx.venue.id, name: 'Extra Dev' })).json;
   ctx.dev2 = (await call('POST', '/api/devices', { venue_id: ctx.venue.id, name: 'Extra Dev 2' })).json;
   ctx.s1 = (await call('POST', '/api/students', { student_number: 'X1', name: 'One', device_id: ctx.dev.id })).json;
@@ -28,7 +28,7 @@ test('setup: venue, two devices, two students', async () => {
 });
 
 test('device: edit name and venue', async () => {
-  const v2 = (await call('POST', '/api/venues', { name: 'Second Hall' })).json;
+  const v2 = (await call('POST', '/api/venues', { name: 'Second Hall', capacity: 50 })).json;
   ctx.v2 = v2;
   const r = await call('PUT', `/api/devices/${ctx.dev2.id}`, { name: 'Renamed', venue_id: v2.id });
   assert.strictEqual(r.status, 200);
@@ -156,18 +156,18 @@ test('events: override validation and double override', async () => {
 test('venue: delete unknown -> 404, bad id -> 400, long name handled', async () => {
   assert.strictEqual((await call('DELETE', '/api/venues/999999')).status, 404);
   assert.strictEqual((await call('DELETE', '/api/venues/abc')).status, 400);
-  const r = await call('POST', '/api/venues', { name: 'x'.repeat(500) });
+  const r = await call('POST', '/api/venues', { name: 'x'.repeat(500), capacity: 10 });
   assert.ok(r.status >= 400 && r.status < 500, `a 500-character venue name gave ${r.status}`);
 });
 test('input: names with quotes / unicode / SQL text are stored safely', async () => {
   const nasty = "O'Brien \"; DROP TABLE venues;-- 🎓";
-  const r = await call('POST', '/api/venues', { name: nasty });
+  const r = await call('POST', '/api/venues', { name: nasty, capacity: 10 });
   assert.strictEqual(r.status, 201);
   assert.strictEqual(r.json.name, nasty);
   assert.strictEqual((await call('GET', '/api/venues')).status, 200);
 });
 test('input: whitespace-only names are rejected', async () => {
-  assert.strictEqual((await call('POST', '/api/venues', { name: '   ' })).status, 400);
+  assert.strictEqual((await call('POST', '/api/venues', { name: '   ', capacity: 10 })).status, 400);
   assert.strictEqual((await call('POST', '/api/devices', { venue_id: ctx.venue.id, name: '   ' })).status, 400);
   assert.strictEqual((await call('POST', '/api/students', { student_number: ' ', name: 'x', device_id: ctx.dev.id })).status, 400);
 });

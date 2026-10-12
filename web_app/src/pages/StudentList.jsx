@@ -32,6 +32,8 @@ export default function StudentList() {
                 <TableRow>
                   <TableHead>Student Number</TableHead>
                   <TableHead>Name</TableHead>
+                  <TableHead>Course</TableHead>
+                  <TableHead>Modules</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Action</TableHead>
                 </TableRow>
@@ -41,6 +43,8 @@ export default function StudentList() {
                   <TableRow key={s.id} className="group">
                     <TableCell className="font-mono text-xs">{s.student_number}</TableCell>
                     <TableCell className="font-medium">{s.name}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{s.course_name || '—'}</TableCell>
+                    <TableCell className="text-xs">{s.modules?.length ? s.modules.map((m) => m.code).join(', ') : '—'}</TableCell>
                     <TableCell>
                       <Badge variant={s.enrollment_status === 'enrolled' ? 'default' : 'secondary'}>
                         {s.enrollment_status}

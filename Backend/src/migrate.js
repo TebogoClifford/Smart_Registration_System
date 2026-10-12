@@ -1,4 +1,4 @@
-// migrate.js — run with `npm run migrate`. Does the same work the server does on start-up.
+// migrate.js — run with `npm run migrate`. Same work the server does on start-up.
 const pool = require('./db');
 const { ensureSchema } = require('./schema');
 

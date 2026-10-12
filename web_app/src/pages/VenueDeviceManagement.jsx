@@ -14,6 +14,7 @@ export default function VenueDeviceManagement() {
   const [venues, setVenues] = useState([]);
   const [devices, setDevices] = useState([]);
   const [venueName, setVenueName] = useState('');
+  const [venueCapacity, setVenueCapacity] = useState('');
   const [deviceName, setDeviceName] = useState('');
   const [venueId, setVenueId] = useState('');
   const [search, setSearch] = useState('');
@@ -77,11 +78,14 @@ export default function VenueDeviceManagement() {
   const handleAddVenue = async (event) => {
     event.preventDefault();
     if (!venueName.trim()) return;
+    const capacity = Number(venueCapacity);
+    if (!Number.isInteger(capacity) || capacity < 1) { toast.error('Enter the number of seats (a whole number, 1 or more)'); return; }
     setSaving(true);
     try {
-      await api.createVenue({ name: venueName.trim() });
+      await api.createVenue({ name: venueName.trim(), capacity });
       toast.success('Venue created');
       setVenueName('');
+      setVenueCapacity('');
       await loadData();
     } catch (error) {
       toast.error(error.message || 'Could not create venue');
@@ -122,27 +126,27 @@ export default function VenueDeviceManagement() {
     <div className="mx-auto max-w-[1500px] space-y-6">
       <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
         <p className="max-w-2xl text-sm text-muted-foreground">Manage exam locations and the access devices installed at each venue.</p>
-        <Button variant="outline" onClick={loadData} disabled={loading} className="gap-2 self-start rounded-xl sm:self-auto">
+        <Button variant="outline" onClick={loadData} disabled={loading} className="gap-2 self-start rounded-md sm:self-auto">
           <RefreshCw size={15} className={loading ? 'animate-spin' : ''} /> Refresh data
         </Button>
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <Card className="rounded-2xl shadow-sm">
+        <Card className="rounded-lg shadow-sm">
           <CardContent className="flex items-center gap-4 p-5">
-            <div className="rounded-xl bg-primary/10 p-3 text-primary"><MapPin size={22} /></div>
+            <div className="rounded-md bg-primary/10 p-3 text-primary"><MapPin size={22} /></div>
             <div><p className="text-sm text-muted-foreground">Total venues</p><p className="text-2xl font-bold">{venues.length}</p></div>
           </CardContent>
         </Card>
-        <Card className="rounded-2xl shadow-sm">
+        <Card className="rounded-lg shadow-sm">
           <CardContent className="flex items-center gap-4 p-5">
-            <div className="rounded-xl bg-primary/10 p-3 text-primary"><Cpu size={22} /></div>
+            <div className="rounded-md bg-primary/10 p-3 text-primary"><Cpu size={22} /></div>
             <div><p className="text-sm text-muted-foreground">Total devices</p><p className="text-2xl font-bold">{devices.length}</p></div>
           </CardContent>
         </Card>
-        <Card className="rounded-2xl shadow-sm">
+        <Card className="rounded-lg shadow-sm">
           <CardContent className="flex items-center gap-4 p-5">
-            <div className="rounded-xl bg-emerald-50 p-3 text-emerald-700"><Cpu size={22} /></div>
+            <div className="rounded-md bg-emerald-50 p-3 text-emerald-700"><Cpu size={22} /></div>
             <div><p className="text-sm text-muted-foreground">Active devices</p><p className="text-2xl font-bold">{devices.filter((device) => String(device.status).toLowerCase() === 'active').length}</p></div>
           </CardContent>
         </Card>
@@ -159,24 +163,26 @@ export default function VenueDeviceManagement() {
       <div className="space-y-6">
 <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1.6fr)_minmax(320px,0.9fr)]">
           <div className="min-w-0 space-y-5">
-            <Card className="rounded-2xl shadow-sm">
+            <Card className="rounded-lg shadow-sm">
               <CardHeader><CardTitle className="text-base">Add a venue</CardTitle></CardHeader>
               <CardContent>
                 <form onSubmit={handleAddVenue} className="flex flex-col gap-3 sm:flex-row">
-                  <Input aria-label="Venue name" placeholder="Venue name (e.g. Hall A)" value={venueName} onChange={(event) => setVenueName(event.target.value)} required className="h-11 rounded-xl" />
-                  <Button type="submit" disabled={saving || !venueName.trim()} className="h-11 shrink-0 rounded-xl"><Plus size={16} className="mr-2" /> Add venue</Button>
+                  <Input aria-label="Venue name" placeholder="Venue name (e.g. Hall A)" value={venueName} onChange={(event) => setVenueName(event.target.value)} required className="h-11 rounded-md" />
+                  <Input aria-label="Venue capacity (seats)" type="number" min="1" step="1" placeholder="Seats" value={venueCapacity} onChange={(event) => setVenueCapacity(event.target.value)} required className="h-11 rounded-md sm:max-w-32" />
+                  <Button type="submit" disabled={saving || !venueName.trim()} className="h-11 shrink-0 rounded-md"><Plus size={16} className="mr-2" /> Add venue</Button>
                 </form>
               </CardContent>
             </Card>
-            <Card className="overflow-hidden rounded-2xl shadow-sm">
+            <Card className="overflow-hidden rounded-lg shadow-sm">
               <CardHeader><CardTitle className="text-base">Venue directory</CardTitle></CardHeader>
               <CardContent className="p-0">
                 {loading ? <p className="py-12 text-center text-sm text-muted-foreground">Loading venues...</p> : filteredVenues.length === 0 ? <p className="py-12 text-center text-sm text-muted-foreground">{venues.length ? 'No venues match your search.' : 'No venues registered yet. Add your first venue above.'}</p> : (
                   <div className="overflow-x-auto"><Table>
-                    <TableHeader><TableRow><TableHead className="pl-5">ID</TableHead><TableHead>Venue name</TableHead><TableHead>Devices</TableHead><TableHead>Created</TableHead><TableHead className="text-right pr-5">Action</TableHead></TableRow></TableHeader>
+                    <TableHeader><TableRow><TableHead className="pl-5">ID</TableHead><TableHead>Venue name</TableHead><TableHead>Capacity</TableHead><TableHead>Devices</TableHead><TableHead>Created</TableHead><TableHead className="text-right pr-5">Action</TableHead></TableRow></TableHeader>
                     <TableBody>{filteredVenues.map((venue) => <TableRow key={venue.id}>
                       <TableCell className="pl-5 font-mono text-xs">{venue.id}</TableCell>
                       <TableCell className="font-medium">{venue.name}</TableCell>
+                      <TableCell>{venue.capacity > 0 ? `${venue.capacity} seats` : <span className="text-amber-700">not set</span>}</TableCell>
                       <TableCell>{devices.filter((device) => String(device.venue_id) === String(venue.id)).length}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">{venue.created_at && !Number.isNaN(new Date(venue.created_at).getTime()) ? new Date(venue.created_at).toLocaleDateString() : '—'}</TableCell>
                       <TableCell className="pr-5 text-right"><Button variant="ghost" size="sm" onClick={() => navigate('/venues/' + venue.id)}>Manage</Button></TableCell>
@@ -186,21 +192,21 @@ export default function VenueDeviceManagement() {
               </CardContent>
             </Card>
           <div id="device-management" className="space-y-5">
-          <Card className="rounded-2xl shadow-sm">
+          <Card className="rounded-lg shadow-sm">
             <CardHeader><CardTitle className="text-base">Register a device</CardTitle></CardHeader>
             <CardContent>
               <form onSubmit={handleAddDevice} className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(200px,1fr)_minmax(180px,0.8fr)_auto]">
-                <Input aria-label="Device name" placeholder="Device name (e.g. Entrance Cam 1)" value={deviceName} onChange={(event) => setDeviceName(event.target.value)} required className="h-11 rounded-xl" />
-                <select aria-label="Assign device to venue" className="h-11 w-full rounded-xl border border-input bg-background px-3 py-2 text-sm" value={venueId} onChange={(event) => setVenueId(event.target.value)} required>
+                <Input aria-label="Device name" placeholder="Device name (e.g. Entrance Cam 1)" value={deviceName} onChange={(event) => setDeviceName(event.target.value)} required className="h-11 rounded-md" />
+                <select aria-label="Assign device to venue" className="h-11 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={venueId} onChange={(event) => setVenueId(event.target.value)} required>
                   <option value="">Select venue</option>
                   {venues.map((venue) => <option key={venue.id} value={venue.id}>{venue.name}</option>)}
                 </select>
-                <Button type="submit" disabled={saving || !deviceName.trim() || !venueId} className="h-11 rounded-xl"><Plus size={16} className="mr-2" /> Add device</Button>
+                <Button type="submit" disabled={saving || !deviceName.trim() || !venueId} className="h-11 rounded-md"><Plus size={16} className="mr-2" /> Add device</Button>
               </form>
               {venues.length === 0 && <p className="mt-3 text-sm text-amber-700">Create a venue before registering a device.</p>}
             </CardContent>
           </Card>
-          <Card className="overflow-hidden rounded-2xl shadow-sm">
+          <Card className="overflow-hidden rounded-lg shadow-sm">
             <CardHeader><CardTitle className="text-base">Device directory</CardTitle></CardHeader>
             <CardContent className="p-0">
               {loading ? <p className="py-12 text-center text-sm text-muted-foreground">Loading devices...</p> : filteredDevices.length === 0 ? <p className="py-12 text-center text-sm text-muted-foreground">{devices.length ? 'No devices match your search.' : 'No devices registered yet. Add your first device above.'}</p> : (
@@ -220,7 +226,7 @@ export default function VenueDeviceManagement() {
         </div>
           </div>
 
-          <Card className="overflow-hidden rounded-2xl border-slate-200 shadow-sm">
+          <Card className="overflow-hidden rounded-lg border-slate-200 shadow-sm">
             <CardHeader className="border-b bg-muted/20 pb-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
@@ -235,17 +241,17 @@ export default function VenueDeviceManagement() {
             </CardHeader>
             <CardContent className="space-y-5 p-5">
               <div className="grid grid-cols-3 gap-2">
-                <div className="rounded-xl border bg-emerald-50/70 p-3 dark:bg-emerald-950/20">
+                <div className="rounded-md border bg-emerald-50/70 p-3 dark:bg-emerald-950/20">
                   <Wifi size={17} className="mb-2 text-emerald-600" />
                   <p className="text-2xl font-bold tabular-nums">{onlineDevices.length}</p>
                   <p className="mt-1 text-xs text-muted-foreground">Online</p>
                 </div>
-                <div className="rounded-xl border bg-rose-50/70 p-3 dark:bg-rose-950/20">
+                <div className="rounded-md border bg-rose-50/70 p-3 dark:bg-rose-950/20">
                   <WifiOff size={17} className="mb-2 text-rose-600" />
                   <p className="text-2xl font-bold tabular-nums">{offlineDevices.length}</p>
                   <p className="mt-1 text-xs text-muted-foreground">Offline</p>
                 </div>
-                <div className="rounded-xl border bg-muted/40 p-3">
+                <div className="rounded-md border bg-muted/40 p-3">
                   <CircleHelp size={17} className="mb-2 text-muted-foreground" />
                   <p className="text-2xl font-bold tabular-nums">{unknownDevices.length}</p>
                   <p className="mt-1 text-xs text-muted-foreground">Unknown</p>
@@ -257,7 +263,7 @@ export default function VenueDeviceManagement() {
                 <span className="text-xs text-muted-foreground">{devices.length} registered</span>
               </div>
               {devices.length === 0 ? (
-                <div className="rounded-xl border border-dashed px-4 py-8 text-center">
+                <div className="rounded-md border border-dashed px-4 py-8 text-center">
                   <Cpu size={24} className="mx-auto mb-2 text-muted-foreground" />
                   <p className="text-sm font-medium">No devices registered</p>
                   <p className="mt-1 text-xs text-muted-foreground">Add a device to see its reported status here.</p>
@@ -270,7 +276,7 @@ export default function VenueDeviceManagement() {
                     const venue = venues.find((item) => String(item.id) === String(device.venue_id));
                     const reportedStatus = device.status ?? device.connection_status ?? 'Status unavailable';
                     return (
-                      <button key={device.id} type="button" onClick={() => navigate('/devices/' + device.id)} className="flex w-full items-center gap-3 rounded-xl border p-3 text-left transition-colors hover:bg-muted/40">
+                      <button key={device.id} type="button" onClick={() => navigate('/devices/' + device.id)} className="flex w-full items-center gap-3 rounded-md border p-3 text-left transition-colors hover:bg-muted/40">
                         <span className={'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ' + (state === 'online' ? 'bg-emerald-100 text-emerald-700' : state === 'offline' ? 'bg-rose-100 text-rose-700' : 'bg-muted text-muted-foreground')}>
                           {state === 'online' ? <Wifi size={17} /> : state === 'offline' ? <WifiOff size={17} /> : <CircleHelp size={17} />}
                         </span>
