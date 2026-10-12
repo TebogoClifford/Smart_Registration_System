@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { api } from '@/lib/api';
+import OverrideDialog from '@/components/OverrideDialog';
 import {
   RefreshCcw, Wifi, WifiOff, AlertCircle, Download, Filter, UserPlus, Search,
   Users, CheckCircle2, XCircle, Activity, TrendingUp, MapPin, ArrowUpRight
@@ -155,6 +156,7 @@ function csvCell(value) {
 export default function Dashboard() {
   const navigate = useNavigate();
   const [events, setEvents] = useState([]);
+  const [overrideFor, setOverrideFor] = useState(null);
   const [analytics, setAnalytics] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -375,6 +377,7 @@ export default function Dashboard() {
                   <TableHead className="whitespace-nowrap px-5 py-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Student ID</TableHead>
                   <TableHead className="whitespace-nowrap px-5 py-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Decision</TableHead>
                   <TableHead className="whitespace-nowrap px-5 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Event ID</TableHead>
+                  <TableHead className="whitespace-nowrap px-5 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Action</TableHead>
                 </TableRow></TableHeader>
                 <TableBody>{filteredEvents.map((event) => {
                   const denied = String(event.decision || '').toLowerCase() === 'denied';
@@ -387,6 +390,13 @@ export default function Dashboard() {
                     <TableCell className="px-5 py-4 font-mono text-xs text-slate-600">{event.student_id || 'N/A'}</TableCell>
                     <TableCell className="px-5 py-4">{decisionBadge(event.decision)}</TableCell>
                     <TableCell className="px-5 py-4 text-right font-mono text-xs text-slate-400">{event.id ?? '—'}</TableCell>
+                    <TableCell className="px-5 py-4 text-right">
+                      {event.overridden
+                        ? <Badge variant="outline">Overridden</Badge>
+                        : event.id != null && String(event.decision || '').toLowerCase() !== 'granted'
+                          ? <Button variant="outline" size="sm" onClick={() => setOverrideFor(event)}>Override</Button>
+                          : null}
+                    </TableCell>
                   </TableRow>;
                 })}</TableBody>
               </Table>
@@ -397,6 +407,7 @@ export default function Dashboard() {
         <span>Smart Registration System · Analytics are based on recorded database events.</span>
         <button type="button" onClick={() => navigate('/venues')} className="inline-flex items-center gap-1 font-semibold text-blue-700 transition-colors hover:text-blue-900">Manage venues and devices <ArrowUpRight size={13} /></button>
       </div>
+      {overrideFor && <OverrideDialog event={overrideFor} onClose={() => setOverrideFor(null)} onDone={() => { setOverrideFor(null); fetchDashboard(true); }} />}
     </div>
   );
 }
