@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../db');
+const { validateIdParam, handleDbError, LIVE_STATUS } = require('../http');
+
+router.param('id', validateIdParam);
 
 // POST /api/venues — create a venue
 router.post('/', async (req, res) => {
@@ -15,8 +18,7 @@ router.post('/', async (req, res) => {
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'internal server error' });
+    handleDbError(res, err);
   }
 });
 
@@ -26,8 +28,34 @@ router.get('/', async (req, res) => {
     const result = await pool.query('SELECT * FROM venues ORDER BY id');
     res.json(result.rows);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'internal server error' });
+    handleDbError(res, err);
+  }
+});
+
+// GET /api/venues/:id — single venue
+router.get('/:id', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM venues WHERE id = $1', [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'venue not found' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    handleDbError(res, err);
+  }
+});
+
+// GET /api/venues/:id/devices — devices assigned to a venue (api_key omitted)
+router.get('/:id/devices', async (req, res) => {
+  try {
+    const venue = await pool.query('SELECT id FROM venues WHERE id = $1', [req.params.id]);
+    if (venue.rows.length === 0) return res.status(404).json({ error: 'venue not found' });
+    const result = await pool.query(
+      `SELECT id, venue_id, name, ${LIVE_STATUS} AS status, last_seen
+       FROM devices WHERE venue_id = $1 ORDER BY id`,
+      [req.params.id]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    handleDbError(res, err);
   }
 });
 
@@ -44,8 +72,7 @@ router.put('/:id', async (req, res) => {
     if (result.rows.length === 0) return res.status(404).json({ error: 'venue not found' });
     res.json(result.rows[0]);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'internal server error' });
+    handleDbError(res, err);
   }
 });
 
@@ -63,8 +90,7 @@ router.delete('/:id', async (req, res) => {
     if (result.rows.length === 0) return res.status(404).json({ error: 'venue not found' });
     res.status(204).send();
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'internal server error' });
+    handleDbError(res, err);
   }
 });
 

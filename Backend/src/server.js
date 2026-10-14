@@ -1,7 +1,6 @@
 const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
-const pool = require('./db');
 
 const venuesRouter = require('./routes/venues');
 const devicesRouter = require('./routes/devices');
@@ -19,42 +18,19 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
-// Temporary Migration Routes
-app.get('/api/admin/migrate-overrides', async (req, res) => {
-  try {
-    const query = `
-      CREATE TABLE IF NOT EXISTS event_overrides (
-        id SERIAL PRIMARY KEY,
-        event_id INTEGER NOT NULL REFERENCES access_events(id) ON DELETE CASCADE,
-        invigilator_id VARCHAR(255) NOT NULL,
-        reason TEXT NOT NULL,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-      );
-      CREATE INDEX IF NOT EXISTS idx_overrides_event_id ON event_overrides(event_id);
-    `;
-    await pool.query(query);
-    res.json({ status: 'success', message: 'event_overrides table created successfully' });
-  } catch (err) {
-    console.error('Migration error:', err);
-    res.status(500).json({ status: 'error', message: err.message });
-  }
-});
-
-app.get('/api/admin/migrate-heartbeat', async (req, res) => {
-  try {
-    await pool.query('ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP WITH TIME ZONE');
-    res.json({ status: 'success', message: 'last_seen column added successfully' });
-  } catch (err) {
-    console.error('Migration error:', err);
-    res.status(500).json ({ status: 'error', message: err.message });
-  }
-})
-
 app.use('/api/venues', venuesRouter);
 app.use('/api/devices', devicesRouter);
 app.use('/api/students', studentsRouter);
 app.use('/api/access-events', accessEventsRouter);
 app.use('/api/stats', statsRouter);
+
+// Unknown routes -> JSON 404; unexpected errors (e.g. malformed JSON body) -> JSON, never an HTML stack trace
+app.use((req, res) => res.status(404).json({ error: 'not found' }));
+app.use((err, req, res, next) => {
+  if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'invalid JSON body' });
+  console.error(err);
+  res.status(500).json({ error: 'internal server error' });
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {

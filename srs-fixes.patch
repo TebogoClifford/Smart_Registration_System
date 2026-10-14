@@ -1,0 +1,942 @@
+diff --git a/Backend/package.json b/Backend/package.json
+index fbe777b..7df6ec9 100644
+--- a/Backend/package.json
++++ b/Backend/package.json
+@@ -4,9 +4,10 @@
+   "description": "",
+   "main": "index.js",
+   "scripts": {
+-    "test": "echo \"Error: no test specified\" && exit 1",
++    "test": "node --test test/api.test.js",
+     "start": "node src/server.js",
+-    "dev": "nodemon src/server.js"
++    "dev": "nodemon src/server.js",
++    "migrate": "node src/migrate_heartbeat.js && node src/migrate_overrides.js"
+   },
+   "keywords": [],
+   "author": "",
+diff --git a/Backend/schema.sql b/Backend/schema.sql
+new file mode 100644
+index 0000000..b2c1a99
+--- /dev/null
++++ b/Backend/schema.sql
+@@ -0,0 +1,30 @@
++-- schema.sql — base tables from the Design Document (section 8.3).
++-- Run once on a fresh database, then `npm run migrate` for the later additions
++-- (devices.last_seen and the event_overrides audit table).
++CREATE TABLE IF NOT EXISTS venues (
++  id SERIAL PRIMARY KEY,
++  name VARCHAR(100) NOT NULL,
++  created_at TIMESTAMP DEFAULT NOW()
++);
++CREATE TABLE IF NOT EXISTS devices (
++  id SERIAL PRIMARY KEY,
++  venue_id INTEGER NOT NULL REFERENCES venues(id),
++  name VARCHAR(100) NOT NULL,
++  api_key VARCHAR(64) NOT NULL,
++  status VARCHAR(20) NOT NULL DEFAULT 'inactive'
++);
++CREATE TABLE IF NOT EXISTS students (
++  id SERIAL PRIMARY KEY,
++  student_number VARCHAR(20) NOT NULL,
++  name VARCHAR(100) NOT NULL,
++  device_id INTEGER NOT NULL REFERENCES devices(id),
++  enrollment_status VARCHAR(20) NOT NULL DEFAULT 'pending',
++  enrollment_image BYTEA
++);
++CREATE TABLE IF NOT EXISTS access_events (
++  id SERIAL PRIMARY KEY,
++  device_id INTEGER NOT NULL REFERENCES devices(id),
++  student_id INTEGER REFERENCES students(id),
++  decision VARCHAR(10) NOT NULL,
++  event_time TIMESTAMP DEFAULT NOW()
++);
+diff --git a/Backend/src/db.js b/Backend/src/db.js
+index 59d3962..fcbc678 100644
+--- a/Backend/src/db.js
++++ b/Backend/src/db.js
+@@ -2,9 +2,15 @@
+ const { Pool } = require('pg');
+ require('dotenv').config();
+ 
++// Neon requires SSL, but a local Postgres (development/testing) does not.
++// Set PGSSL=disable, or point DATABASE_URL at localhost, to turn SSL off.
++const url = process.env.DATABASE_URL || '';
++const isLocal = /@(localhost|127\.0\.0\.1)|host=\/|^postgres(ql)?:\/\/[^@]*\/?\?host=/.test(url);
++const useSsl = process.env.PGSSL !== 'disable' && !isLocal;
++
+ const pool = new Pool({
+   connectionString: process.env.DATABASE_URL,
+-  ssl: { rejectUnauthorized: false }, // Neon requires SSL
++  ssl: useSsl ? { rejectUnauthorized: false } : false,
+ });
+ 
+-module.exports = pool;
+\ No newline at end of file
++module.exports = pool;
+diff --git a/Backend/src/http.js b/Backend/src/http.js
+new file mode 100644
+index 0000000..ad7b8dd
+--- /dev/null
++++ b/Backend/src/http.js
+@@ -0,0 +1,46 @@
++// http.js — small shared helpers for request validation and DB error mapping
++const crypto = require('crypto');
++
++// router.param handler: reject non-numeric :id before it reaches Postgres
++// (otherwise Postgres throws "invalid input syntax for type integer" -> 500).
++function validateIdParam(req, res, next, value) {
++  if (!/^\d+$/.test(String(value)) || Number(value) > 2147483647) {
++    return res.status(400).json({ error: 'id must be a positive integer' });
++  }
++  next();
++}
++
++// True if v is a positive integer (number or numeric string).
++const isId = (v) => /^\d+$/.test(String(v)) && Number(v) > 0 && Number(v) <= 2147483647;
++
++// Map known Postgres errors to client errors; anything else is a real 500.
++function handleDbError(res, err) {
++  if (err.code === '23503') { // foreign_key_violation
++    return res.status(400).json({ error: 'a referenced venue, device or student does not exist' });
++  }
++  if (err.code === '23505') { // unique_violation
++    return res.status(409).json({ error: 'a record with those details already exists' });
++  }
++  if (err.code === '22P02' || err.code === '22007' || err.code === '22008') { // bad input syntax / date
++    return res.status(400).json({ error: 'one or more fields have an invalid format' });
++  }
++  console.error(err);
++  return res.status(500).json({ error: 'internal server error' });
++}
++
++// Constant-time comparison of a presented device key against the stored one.
++function keyMatches(presented, stored) {
++  if (!presented || !stored) return false;
++  const a = Buffer.from(String(presented));
++  const b = Buffer.from(String(stored));
++  return a.length === b.length && crypto.timingSafeEqual(a, b);
++}
++
++// A device counts as 'active' only while its heartbeat is fresh; otherwise 'inactive'.
++// Derived at read time so a device that dies does not stay "online" forever.
++const HEARTBEAT_TIMEOUT_SECONDS = parseInt(process.env.HEARTBEAT_TIMEOUT_SECONDS, 10) || 120;
++const LIVE_STATUS = `CASE WHEN last_seen IS NOT NULL
++  AND last_seen > NOW() - make_interval(secs => ${HEARTBEAT_TIMEOUT_SECONDS})
++  THEN 'active' ELSE 'inactive' END`;
++
++module.exports = { validateIdParam, isId, handleDbError, keyMatches, LIVE_STATUS };
+diff --git a/Backend/src/routes/accessEvents.js b/Backend/src/routes/accessEvents.js
+index ad054e7..e7d7e33 100644
+--- a/Backend/src/routes/accessEvents.js
++++ b/Backend/src/routes/accessEvents.js
+@@ -1,6 +1,9 @@
+ const express = require('express');
+ const router = express.Router();
+ const pool = require('../db');
++const { validateIdParam, isId, handleDbError, keyMatches } = require('../http');
++
++router.param('id', validateIdParam);
+ 
+ // POST /api/access-events — device reports an access decision
+ router.post('/', async (req, res) => {
+@@ -9,15 +12,25 @@ router.post('/', async (req, res) => {
+   if (!deviceId || !decision) {
+     return res.status(400).json({ error: 'deviceId and decision are required' });
+   }
+-  if (!['granted', 'denied'].includes(decision)) {
+-    return res.status(400).json({ error: "decision must be 'granted' or 'denied'" });
++  // 'error' = device could not capture/match (design: Access Verification "Error" status)
++  if (!['granted', 'denied', 'error'].includes(decision)) {
++    return res.status(400).json({ error: "decision must be 'granted', 'denied' or 'error'" });
++  }
++  if (!isId(deviceId)) return res.status(400).json({ error: 'deviceId must be a positive integer' });
++  if (studentId && !isId(studentId)) return res.status(400).json({ error: 'studentId must be a positive integer' });
++  if (timestamp && Number.isNaN(Date.parse(timestamp))) {
++    return res.status(400).json({ error: 'timestamp must be a valid date/time' });
+   }
+ 
+   try {
+-    const deviceCheck = await pool.query('SELECT id FROM devices WHERE id = $1', [deviceId]);
++    const deviceCheck = await pool.query('SELECT id, api_key FROM devices WHERE id = $1', [deviceId]);
+     if (deviceCheck.rows.length === 0) {
+       return res.status(404).json({ error: 'device not found' });
+     }
++    // Only the registered device may report events (design: shared secret on each request)
++    if (!keyMatches(req.get('X-Device-Key'), deviceCheck.rows[0].api_key)) {
++      return res.status(401).json({ error: 'invalid or missing device key' });
++    }
+ 
+     const result = await pool.query(
+       `INSERT INTO access_events (device_id, student_id, decision, event_time)
+@@ -27,22 +40,35 @@ router.post('/', async (req, res) => {
+     );
+     res.status(201).json(result.rows[0]);
+   } catch (err) {
+-    console.error(err);
+-    res.status(500).json({ error: 'internal server error' });
++    handleDbError(res, err);
+   }
+ });
+ 
+-// GET /api/access-events — feed for the live dashboard (polling)
++// GET /api/access-events — feed for the live dashboard (polling).
++// Optional ?from=&to= (ISO timestamps, from inclusive / to exclusive) and ?limit= (default 100, max 500).
+ router.get('/', async (req, res) => {
++  const { from, to } = req.query;
++  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
++  for (const [k, v] of [['from', from], ['to', to]]) {
++    if (v && Number.isNaN(Date.parse(v))) {
++      return res.status(400).json({ error: `${k} must be a valid date/time` });
++    }
++  }
+   try {
+     const result = await pool.query(
+-      `SELECT id, device_id AS "deviceId", student_id AS "studentId", decision, event_time AS "timestamp"
+-       FROM access_events ORDER BY event_time DESC LIMIT 100`
++      `SELECT e.id, e.device_id AS "deviceId", e.student_id AS "studentId", e.decision,
++              e.event_time AS "timestamp",
++              EXISTS (SELECT 1 FROM event_overrides o WHERE o.event_id = e.id) AS overridden
++       FROM access_events e
++       WHERE ($1::timestamptz IS NULL OR e.event_time >= $1)
++         AND ($2::timestamptz IS NULL OR e.event_time <  $2)
++       ORDER BY e.event_time DESC, e.id DESC
++       LIMIT $3`,
++      [from || null, to || null, limit]
+     );
+     res.json(result.rows);
+   } catch (err) {
+-    console.error(err);
+-    res.status(500).json({ error: 'internal server error' });
++    handleDbError(res, err);
+   }
+ });
+ 
+@@ -71,8 +97,7 @@ router.post('/:id/override', async (req, res) => {
+ 
+     res.json({ status: 'success', message: 'Entry override recorded' });
+   } catch (err) {
+-    console.error(err);
+-    res.status(500).json({ error: 'internal server error' });
++    handleDbError(res, err);
+   }
+ });
+ 
+diff --git a/Backend/src/routes/devices.js b/Backend/src/routes/devices.js
+index 737eca2..7ad0280 100644
+--- a/Backend/src/routes/devices.js
++++ b/Backend/src/routes/devices.js
+@@ -2,6 +2,11 @@ const express = require('express');
+ const router = express.Router();
+ const pool = require('../db');
+ const crypto = require('crypto');
++const { validateIdParam, isId, handleDbError, keyMatches, LIVE_STATUS } = require('../http');
++
++router.param('id', validateIdParam);
++
++
+ 
+ // POST /api/devices — register a device against a venue
+ router.post('/', async (req, res) => {
+@@ -9,6 +14,7 @@ router.post('/', async (req, res) => {
+   if (!venue_id || !name) {
+     return res.status(400).json({ error: 'venue_id and name are required' });
+   }
++  if (!isId(venue_id)) return res.status(400).json({ error: 'venue_id must be a positive integer' });
+   const api_key = crypto.randomBytes(32).toString('hex');
+   try {
+     const result = await pool.query(
+@@ -18,31 +24,34 @@ router.post('/', async (req, res) => {
+     );
+     res.status(201).json(result.rows[0]);
+   } catch (err) {
+-    console.error(err);
+-    res.status(500).json({ error: 'internal server error' });
++    handleDbError(res, err);
+   }
+ });
+ 
+ // GET /api/devices — list all devices
+ router.get('/', async (req, res) => {
+   try {
+-    const result = await pool.query('SELECT * FROM devices ORDER BY id');
++    // api_key is a secret — only the single-device view (admin copy-to-firmware) returns it
++    const result = await pool.query(
++      `SELECT id, venue_id, name, ${LIVE_STATUS} AS status, last_seen FROM devices ORDER BY id`
++    );
+     res.json(result.rows);
+   } catch (err) {
+-    console.error(err);
+-    res.status(500).json({ error: 'internal server error' });
++    handleDbError(res, err);
+   }
+ });
+ 
+ // GET /api/devices/:id — single device (needed for detail page)
+ router.get('/:id', async (req, res) => {
+   try {
+-    const result = await pool.query('SELECT * FROM devices WHERE id = $1', [req.params.id]);
++    const result = await pool.query(
++      `SELECT id, venue_id, name, api_key, ${LIVE_STATUS} AS status, last_seen FROM devices WHERE id = $1`,
++      [req.params.id]
++    );
+     if (result.rows.length === 0) return res.status(404).json({ error: 'device not found' });
+     res.json(result.rows[0]);
+   } catch (err) {
+-    console.error(err);
+-    res.status(500).json({ error: 'internal server error' });
++    handleDbError(res, err);
+   }
+ });
+ 
+@@ -51,6 +60,7 @@ router.put('/:id', async (req, res) => {
+   const { id } = req.params;
+   const { name, venue_id } = (req.body ?? {});
+   if (!name || !venue_id) return res.status(400).json({ error: 'name and venue_id are required' });
++  if (!isId(venue_id)) return res.status(400).json({ error: 'venue_id must be a positive integer' });
+   try {
+     const result = await pool.query(
+       'UPDATE devices SET name = $1, venue_id = $2 WHERE id = $3 RETURNING *',
+@@ -59,8 +69,7 @@ router.put('/:id', async (req, res) => {
+     if (result.rows.length === 0) return res.status(404).json({ error: 'device not found' });
+     res.json(result.rows[0]);
+   } catch (err) {
+-    console.error(err);
+-    res.status(500).json({ error: 'internal server error' });
++    handleDbError(res, err);
+   }
+ });
+ 
+@@ -74,25 +83,37 @@ router.delete('/:id', async (req, res) => {
+         error: `Cannot delete device: ${studentCheck.rows.length} student(s) still enrolled. Remove them first.`,
+       });
+     }
++    // Access events are the audit trail, so a device that has reported events cannot be deleted.
++    const eventCheck = await pool.query('SELECT 1 FROM access_events WHERE device_id = $1 LIMIT 1', [id]);
++    if (eventCheck.rows.length > 0) {
++      return res.status(409).json({
++        error: 'Cannot delete device: it has recorded access events (audit history). Set it inactive instead.',
++      });
++    }
+     const result = await pool.query('DELETE FROM devices WHERE id = $1 RETURNING id', [id]);
+     if (result.rows.length === 0) return res.status(404).json({ error: 'device not found' });
+     res.status(204).send();
+   } catch (err) {
+-    console.error(err);
+-    res.status(500).json({ error: 'internal server error' });
++    handleDbError(res, err);
+   }
+ });
+ 
+-// POST /api/devices/heartbeat — update device last_seen
++// POST /api/devices/heartbeat — device reports it is alive.
++// Requires the device's api_key in the X-Device-Key header (design: shared secret on each request).
+ router.post('/heartbeat', async (req, res) => {
+   const { deviceId } = (req.body ?? {});
+   if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
++  if (!isId(deviceId)) return res.status(400).json({ error: 'deviceId must be a positive integer' });
+   try {
++    const device = await pool.query('SELECT id, api_key FROM devices WHERE id = $1', [deviceId]);
++    if (device.rows.length === 0) return res.status(404).json({ error: 'device not found' });
++    if (!keyMatches(req.get('X-Device-Key'), device.rows[0].api_key)) {
++      return res.status(401).json({ error: 'invalid or missing device key' });
++    }
+     await pool.query('UPDATE devices SET last_seen = NOW() WHERE id = $1', [deviceId]);
+     res.json({ status: 'ok' });
+   } catch (err) {
+-    console.error(err);
+-    res.status(500).json({ error: 'internal server error' });
++    handleDbError(res, err);
+   }
+ });
+ 
+diff --git a/Backend/src/routes/students.js b/Backend/src/routes/students.js
+index 0bfa07b..82a30a7 100644
+--- a/Backend/src/routes/students.js
++++ b/Backend/src/routes/students.js
+@@ -1,6 +1,9 @@
+ const express = require('express');
+ const router = express.Router();
+ const pool = require('../db');
++const { validateIdParam, isId, handleDbError, keyMatches } = require('../http');
++
++router.param('id', validateIdParam);
+ 
+ // POST /api/students — start enrollment (status defaults to 'pending')
+ router.post('/', async (req, res) => {
+@@ -10,7 +13,16 @@ router.post('/', async (req, res) => {
+       .status(400)
+       .json({ error: 'student_number, name, and device_id are required' });
+   }
++  if (!isId(device_id)) return res.status(400).json({ error: 'device_id must be a positive integer' });
+   try {
++    // Same student enrolled twice on the same device would give two embeddings for one person.
++    const dup = await pool.query(
++      'SELECT id FROM students WHERE student_number = $1 AND device_id = $2',
++      [student_number, device_id]
++    );
++    if (dup.rows.length > 0) {
++      return res.status(409).json({ error: 'this student number is already registered on that device' });
++    }
+     const result = await pool.query(
+       `INSERT INTO students (student_number, name, device_id, enrollment_status)
+        VALUES ($1, $2, $3, 'pending') RETURNING *`,
+@@ -18,8 +30,7 @@ router.post('/', async (req, res) => {
+     );
+     res.status(201).json(result.rows[0]);
+   } catch (err) {
+-    console.error(err);
+-    res.status(500).json({ error: 'internal server error' });
++    handleDbError(res, err);
+   }
+ });
+ 
+@@ -29,8 +40,7 @@ router.get('/', async (req, res) => {
+     const result = await pool.query('SELECT * FROM students ORDER BY id');
+     res.json(result.rows);
+   } catch (err) {
+-    console.error(err);
+-    res.status(500).json({ error: 'internal server error' });
++    handleDbError(res, err);
+   }
+ });
+ 
+@@ -41,8 +51,7 @@ router.get('/:id', async (req, res) => {
+     if (result.rows.length === 0) return res.status(404).json({ error: 'student not found' });
+     res.json(result.rows[0]);
+   } catch (err) {
+-    console.error(err);
+-    res.status(500).json({ error: 'internal server error' });
++    handleDbError(res, err);
+   }
+ });
+ 
+@@ -53,7 +62,15 @@ router.put('/:id', async (req, res) => {
+   if (!student_number || !name || !device_id) {
+     return res.status(400).json({ error: 'student_number, name, and device_id are required' });
+   }
++  if (!isId(device_id)) return res.status(400).json({ error: 'device_id must be a positive integer' });
+   try {
++    const dup = await pool.query(
++      'SELECT id FROM students WHERE student_number = $1 AND device_id = $2 AND id <> $3',
++      [student_number, device_id, id]
++    );
++    if (dup.rows.length > 0) {
++      return res.status(409).json({ error: 'this student number is already registered on that device' });
++    }
+     const result = await pool.query(
+       'UPDATE students SET student_number = $1, name = $2, device_id = $3 WHERE id = $4 RETURNING *',
+       [student_number, name, device_id, id]
+@@ -61,20 +78,55 @@ router.put('/:id', async (req, res) => {
+     if (result.rows.length === 0) return res.status(404).json({ error: 'student not found' });
+     res.json(result.rows[0]);
+   } catch (err) {
+-    console.error(err);
+-    res.status(500).json({ error: 'internal server error' });
++    handleDbError(res, err);
++  }
++});
++
++// PUT /api/students/:id/enrollment — the device reports the outcome of an enrollment capture
++// (design: Student Enrollment, step 7-8). Needs the device's key in X-Device-Key.
++router.put('/:id/enrollment', async (req, res) => {
++  const { status } = (req.body ?? {});
++  if (!['enrolled', 'failed'].includes(status)) {
++    return res.status(400).json({ error: "status must be 'enrolled' or 'failed'" });
++  }
++  try {
++    const found = await pool.query(
++      `SELECT s.id, d.api_key FROM students s JOIN devices d ON d.id = s.device_id WHERE s.id = $1`,
++      [req.params.id]
++    );
++    if (found.rows.length === 0) return res.status(404).json({ error: 'student not found' });
++    if (!keyMatches(req.get('X-Device-Key'), found.rows[0].api_key)) {
++      return res.status(401).json({ error: 'invalid or missing device key' });
++    }
++    const result = await pool.query(
++      'UPDATE students SET enrollment_status = $1 WHERE id = $2 RETURNING *',
++      [status, req.params.id]
++    );
++    res.json(result.rows[0]);
++  } catch (err) {
++    handleDbError(res, err);
+   }
+ });
+ 
+-// DELETE /api/students/:id — no dependents to block on (access_events.student_id is nullable)
++// DELETE /api/students/:id — access history is kept (audit trail): events lose the student link
++// (access_events.student_id is nullable) instead of blocking the delete or being removed.
+ router.delete('/:id', async (req, res) => {
++  const client = await pool.connect();
+   try {
+-    const result = await pool.query('DELETE FROM students WHERE id = $1 RETURNING id', [req.params.id]);
+-    if (result.rows.length === 0) return res.status(404).json({ error: 'student not found' });
++    await client.query('BEGIN');
++    await client.query('UPDATE access_events SET student_id = NULL WHERE student_id = $1', [req.params.id]);
++    const result = await client.query('DELETE FROM students WHERE id = $1 RETURNING id', [req.params.id]);
++    if (result.rows.length === 0) {
++      await client.query('ROLLBACK');
++      return res.status(404).json({ error: 'student not found' });
++    }
++    await client.query('COMMIT');
+     res.status(204).send();
+   } catch (err) {
+-    console.error(err);
+-    res.status(500).json({ error: 'internal server error' });
++    await client.query('ROLLBACK').catch(() => {});
++    handleDbError(res, err);
++  } finally {
++    client.release();
+   }
+ });
+ 
+diff --git a/Backend/src/routes/venues.js b/Backend/src/routes/venues.js
+index d151cab..ee7db47 100644
+--- a/Backend/src/routes/venues.js
++++ b/Backend/src/routes/venues.js
+@@ -1,6 +1,9 @@
+ const express = require('express');
+ const router = express.Router();
+ const pool = require('../db');
++const { validateIdParam, handleDbError, LIVE_STATUS } = require('../http');
++
++router.param('id', validateIdParam);
+ 
+ // POST /api/venues — create a venue
+ router.post('/', async (req, res) => {
+@@ -15,8 +18,7 @@ router.post('/', async (req, res) => {
+     );
+     res.status(201).json(result.rows[0]);
+   } catch (err) {
+-    console.error(err);
+-    res.status(500).json({ error: 'internal server error' });
++    handleDbError(res, err);
+   }
+ });
+ 
+@@ -26,8 +28,34 @@ router.get('/', async (req, res) => {
+     const result = await pool.query('SELECT * FROM venues ORDER BY id');
+     res.json(result.rows);
+   } catch (err) {
+-    console.error(err);
+-    res.status(500).json({ error: 'internal server error' });
++    handleDbError(res, err);
++  }
++});
++
++// GET /api/venues/:id — single venue
++router.get('/:id', async (req, res) => {
++  try {
++    const result = await pool.query('SELECT * FROM venues WHERE id = $1', [req.params.id]);
++    if (result.rows.length === 0) return res.status(404).json({ error: 'venue not found' });
++    res.json(result.rows[0]);
++  } catch (err) {
++    handleDbError(res, err);
++  }
++});
++
++// GET /api/venues/:id/devices — devices assigned to a venue (api_key omitted)
++router.get('/:id/devices', async (req, res) => {
++  try {
++    const venue = await pool.query('SELECT id FROM venues WHERE id = $1', [req.params.id]);
++    if (venue.rows.length === 0) return res.status(404).json({ error: 'venue not found' });
++    const result = await pool.query(
++      `SELECT id, venue_id, name, ${LIVE_STATUS} AS status, last_seen
++       FROM devices WHERE venue_id = $1 ORDER BY id`,
++      [req.params.id]
++    );
++    res.json(result.rows);
++  } catch (err) {
++    handleDbError(res, err);
+   }
+ });
+ 
+@@ -44,8 +72,7 @@ router.put('/:id', async (req, res) => {
+     if (result.rows.length === 0) return res.status(404).json({ error: 'venue not found' });
+     res.json(result.rows[0]);
+   } catch (err) {
+-    console.error(err);
+-    res.status(500).json({ error: 'internal server error' });
++    handleDbError(res, err);
+   }
+ });
+ 
+@@ -63,8 +90,7 @@ router.delete('/:id', async (req, res) => {
+     if (result.rows.length === 0) return res.status(404).json({ error: 'venue not found' });
+     res.status(204).send();
+   } catch (err) {
+-    console.error(err);
+-    res.status(500).json({ error: 'internal server error' });
++    handleDbError(res, err);
+   }
+ });
+ 
+diff --git a/Backend/src/server.js b/Backend/src/server.js
+index b60bf88..a350d1e 100644
+--- a/Backend/src/server.js
++++ b/Backend/src/server.js
+@@ -1,7 +1,6 @@
+ const express = require('express');
+ const cors = require('cors');
+ require('dotenv').config();
+-const pool = require('./db');
+ 
+ const venuesRouter = require('./routes/venues');
+ const devicesRouter = require('./routes/devices');
+@@ -19,43 +18,20 @@ app.get('/health', (req, res) => {
+   res.json({ status: 'ok' });
+ });
+ 
+-// Temporary Migration Routes
+-app.get('/api/admin/migrate-overrides', async (req, res) => {
+-  try {
+-    const query = `
+-      CREATE TABLE IF NOT EXISTS event_overrides (
+-        id SERIAL PRIMARY KEY,
+-        event_id INTEGER NOT NULL REFERENCES access_events(id) ON DELETE CASCADE,
+-        invigilator_id VARCHAR(255) NOT NULL,
+-        reason TEXT NOT NULL,
+-        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+-      );
+-      CREATE INDEX IF NOT EXISTS idx_overrides_event_id ON event_overrides(event_id);
+-    `;
+-    await pool.query(query);
+-    res.json({ status: 'success', message: 'event_overrides table created successfully' });
+-  } catch (err) {
+-    console.error('Migration error:', err);
+-    res.status(500).json({ status: 'error', message: err.message });
+-  }
+-});
+-
+-app.get('/api/admin/migrate-heartbeat', async (req, res) => {
+-  try {
+-    await pool.query('ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP WITH TIME ZONE');
+-    res.json({ status: 'success', message: 'last_seen column added successfully' });
+-  } catch (err) {
+-    console.error('Migration error:', err);
+-    res.status(500).json ({ status: 'error', message: err.message });
+-  }
+-})
+-
+ app.use('/api/venues', venuesRouter);
+ app.use('/api/devices', devicesRouter);
+ app.use('/api/students', studentsRouter);
+ app.use('/api/access-events', accessEventsRouter);
+ app.use('/api/stats', statsRouter);
+ 
++// Unknown routes -> JSON 404; unexpected errors (e.g. malformed JSON body) -> JSON, never an HTML stack trace
++app.use((req, res) => res.status(404).json({ error: 'not found' }));
++app.use((err, req, res, next) => {
++  if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'invalid JSON body' });
++  console.error(err);
++  res.status(500).json({ error: 'internal server error' });
++});
++
+ const PORT = process.env.PORT || 3000;
+ app.listen(PORT, () => {
+   console.log(`Backend listening on port ${PORT}`);
+diff --git a/Backend/test/api.test.js b/Backend/test/api.test.js
+new file mode 100644
+index 0000000..fb04b85
+--- /dev/null
++++ b/Backend/test/api.test.js
+@@ -0,0 +1,218 @@
++// API tests — run with: BASE_URL=http://localhost:3111 node --test test/api.test.js
++const { test } = require('node:test');
++const assert = require('node:assert');
++
++const BASE = process.env.BASE_URL || 'http://localhost:3111';
++const call = async (method, path, body, headers = {}) => {
++  const res = await fetch(BASE + path, {
++    method,
++    headers: { 'Content-Type': 'application/json', ...headers },
++    body: body === undefined ? undefined : JSON.stringify(body),
++  });
++  const text = await res.text();
++  let json = null;
++  try { json = JSON.parse(text); } catch { /* not JSON */ }
++  return { status: res.status, json };
++};
++
++const ctx = {};
++const key = () => ({ 'X-Device-Key': ctx.device.api_key });
++
++test('health check', async () => {
++  const r = await call('GET', '/health');
++  assert.strictEqual(r.status, 200);
++});
++
++// ---------- venues ----------
++test('venue: create / list / edit', async () => {
++  let r = await call('POST', '/api/venues', { name: 'Exam Hall A' });
++  assert.strictEqual(r.status, 201);
++  ctx.venue = r.json;
++  r = await call('GET', '/api/venues');
++  assert.ok(r.json.some((v) => v.id === ctx.venue.id));
++  r = await call('PUT', `/api/venues/${ctx.venue.id}`, { name: 'Exam Hall B' });
++  assert.strictEqual(r.json.name, 'Exam Hall B');
++});
++test('venue: missing name -> 400', async () => {
++  assert.strictEqual((await call('POST', '/api/venues', {})).status, 400);
++});
++test('venue: non-numeric id -> 400/404, not 500', async () => {
++  const r = await call('PUT', '/api/venues/abc', { name: 'x' });
++  assert.ok([400, 404].includes(r.status), `got ${r.status}`);
++});
++test('venue: unknown id -> 404', async () => {
++  assert.strictEqual((await call('PUT', '/api/venues/999999', { name: 'x' })).status, 404);
++});
++
++// ---------- devices ----------
++test('device: create against venue', async () => {
++  const r = await call('POST', '/api/devices', { venue_id: ctx.venue.id, name: 'Entrance Cam 1' });
++  assert.strictEqual(r.status, 201);
++  assert.strictEqual(r.json.api_key.length, 64);
++  ctx.device = r.json;
++});
++test('device: non-existent venue -> 4xx, not 500', async () => {
++  const r = await call('POST', '/api/devices', { venue_id: 999999, name: 'bad' });
++  assert.ok(r.status >= 400 && r.status < 500, `got ${r.status}`);
++});
++test('device: list does not leak api_key', async () => {
++  const r = await call('GET', '/api/devices');
++  assert.ok(r.json.every((d) => d.api_key === undefined), 'api_key exposed to unauthenticated callers');
++});
++test('device: heartbeat updates last_seen', async () => {
++  const r = await call('POST', '/api/devices/heartbeat', { deviceId: ctx.device.id }, key());
++  assert.strictEqual(r.status, 200);
++  const d = await call('GET', `/api/devices/${ctx.device.id}`);
++  assert.ok(d.json.last_seen, 'last_seen not set');
++});
++test('device: heartbeat for unknown device -> 404', async () => {
++  const r = await call('POST', '/api/devices/heartbeat', { deviceId: 999999 }, key());
++  assert.strictEqual(r.status, 404);
++});
++test('device: heartbeat without / with wrong key -> 401', async () => {
++  assert.strictEqual((await call('POST', '/api/devices/heartbeat', { deviceId: ctx.device.id })).status, 401);
++  const bad = { 'X-Device-Key': 'x'.repeat(64) };
++  assert.strictEqual((await call('POST', '/api/devices/heartbeat', { deviceId: ctx.device.id }, bad)).status, 401);
++});
++test('device: single-device view still returns api_key (admin copies it into firmware)', async () => {
++  const r = await call('GET', `/api/devices/${ctx.device.id}`);
++  assert.strictEqual(r.json.api_key, ctx.device.api_key);
++});
++test('device: heartbeat marks device active', async () => {
++  const d = await call('GET', `/api/devices/${ctx.device.id}`);
++  assert.strictEqual(d.json.status, 'active');
++});
++
++// ---------- students ----------
++test('student: create pending', async () => {
++  const r = await call('POST', '/api/students', { student_number: '220000001', name: 'Test Student', device_id: ctx.device.id });
++  assert.strictEqual(r.status, 201);
++  assert.strictEqual(r.json.enrollment_status, 'pending');
++  ctx.student = r.json;
++});
++test('student: duplicate student_number -> 409, not 500', async () => {
++  const r = await call('POST', '/api/students', { student_number: '220000001', name: 'Dup', device_id: ctx.device.id });
++  assert.strictEqual(r.status, 409, `got ${r.status}`);
++});
++test('student: non-existent device -> 4xx, not 500', async () => {
++  const r = await call('POST', '/api/students', { student_number: '220000002', name: 'X', device_id: 999999 });
++  assert.ok(r.status >= 400 && r.status < 500, `got ${r.status}`);
++});
++test('student: enrollment result needs the device key', async () => {
++  const r = await call('PUT', `/api/students/${ctx.student.id}/enrollment`, { status: 'enrolled' });
++  assert.strictEqual(r.status, 401);
++});
++test('student: device reports enrollment complete', async () => {
++  const r = await call('PUT', `/api/students/${ctx.student.id}/enrollment`, { status: 'enrolled' }, key());
++  assert.strictEqual(r.status, 200);
++  assert.strictEqual(r.json.enrollment_status, 'enrolled');
++});
++
++// ---------- access events ----------
++test('event: granted with student', async () => {
++  const r = await call('POST', '/api/access-events', { deviceId: ctx.device.id, studentId: ctx.student.id, decision: 'granted' }, key());
++  assert.strictEqual(r.status, 201);
++  ctx.event = r.json;
++});
++test('event: denied with null student', async () => {
++  const r = await call('POST', '/api/access-events', { deviceId: ctx.device.id, studentId: null, decision: 'denied' }, key());
++  assert.strictEqual(r.status, 201);
++});
++test('event: no device key -> 401', async () => {
++  const r = await call('POST', '/api/access-events', { deviceId: ctx.device.id, decision: 'granted' });
++  assert.strictEqual(r.status, 401);
++});
++test('event: bad decision -> 400', async () => {
++  assert.strictEqual((await call('POST', '/api/access-events', { deviceId: ctx.device.id, decision: 'maybe' }, key())).status, 400);
++});
++test('event: invalid timestamp -> 400, not 500', async () => {
++  const r = await call('POST', '/api/access-events', { deviceId: ctx.device.id, decision: 'denied', timestamp: 'not-a-date' }, key());
++  assert.strictEqual(r.status, 400, `got ${r.status}`);
++});
++test('event: unknown student -> 4xx, not 500', async () => {
++  const r = await call('POST', '/api/access-events', { deviceId: ctx.device.id, studentId: 999999, decision: 'granted' }, key());
++  assert.ok(r.status >= 400 && r.status < 500, `got ${r.status}`);
++});
++test('event: error decision is accepted (design: Error status)', async () => {
++  const r = await call('POST', '/api/access-events', { deviceId: ctx.device.id, decision: 'error' }, key());
++  assert.strictEqual(r.status, 201, `got ${r.status}`);
++});
++test('event: list is newest first', async () => {
++  const r = await call('GET', '/api/access-events');
++  assert.strictEqual(r.status, 200);
++  const t = r.json.map((e) => +new Date(e.timestamp));
++  assert.deepStrictEqual(t, [...t].sort((a, b) => b - a));
++});
++test('event: list supports from/to filter (dashboard date picker)', async () => {
++  let r = await call('GET', '/api/access-events?from=2000-01-01T00:00:00Z&to=2000-01-02T00:00:00Z');
++  assert.strictEqual(r.status, 200);
++  assert.strictEqual(r.json.length, 0);
++  r = await call('GET', '/api/access-events?from=garbage');
++  assert.strictEqual(r.status, 400);
++});
++test('event: override is recorded and visible on the event', async () => {
++  let r = await call('POST', `/api/access-events/${ctx.event.id}/override`, { invigilatorId: 'inv1', reason: 'ID checked manually' });
++  assert.strictEqual(r.status, 200);
++  r = await call('GET', '/api/access-events');
++  const e = r.json.find((x) => x.id === ctx.event.id);
++  assert.ok(e.overridden, 'event does not show override');
++});
++test('event: override unknown event -> 404', async () => {
++  const r = await call('POST', '/api/access-events/999999/override', { invigilatorId: 'a', reason: 'b' });
++  assert.strictEqual(r.status, 404);
++});
++
++// ---------- stats ----------
++test('stats: counts today and errors', async () => {
++  const r = await call('GET', '/api/stats');
++  assert.strictEqual(r.status, 200);
++  assert.ok(r.json.total >= 3);
++  assert.ok(r.json.errors >= 1, 'errors count never increments');
++  assert.strictEqual(r.json.dailyTrend.length, 7);
++});
++
++// ---------- admin / security ----------
++test('security: migration endpoints are not public GETs', async () => {
++  const r = await call('GET', '/api/admin/migrate-overrides');
++  assert.ok(r.status === 401 || r.status === 403 || r.status === 404, `got ${r.status}`);
++});
++
++test('http: malformed JSON body -> 400 JSON', async () => {
++  const res = await fetch(BASE + '/api/venues', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{bad' });
++  assert.strictEqual(res.status, 400);
++});
++test('http: unknown route -> 404 JSON', async () => {
++  const r = await call('GET', '/api/nope');
++  assert.strictEqual(r.status, 404);
++  assert.ok(r.json && r.json.error);
++});
++test('venue: GET one + its devices (used by api.js)', async () => {
++  let r = await call('GET', `/api/venues/${ctx.venue.id}`);
++  assert.strictEqual(r.status, 200);
++  r = await call('GET', `/api/venues/${ctx.venue.id}/devices`);
++  assert.strictEqual(r.status, 200);
++  assert.ok(r.json.every((d) => d.api_key === undefined));
++  assert.strictEqual((await call('GET', '/api/venues/999999')).status, 404);
++});
++
++// ---------- delete rules ----------
++test('delete: venue blocked while device assigned (409)', async () => {
++  assert.strictEqual((await call('DELETE', `/api/venues/${ctx.venue.id}`)).status, 409);
++});
++test('delete: device blocked while student enrolled (409)', async () => {
++  assert.strictEqual((await call('DELETE', `/api/devices/${ctx.device.id}`)).status, 409);
++});
++test('delete: student removed, access history kept with null student', async () => {
++  assert.strictEqual((await call('DELETE', `/api/students/${ctx.student.id}`)).status, 204);
++  const r = await call('GET', '/api/access-events');
++  const e = r.json.find((x) => x.id === ctx.event.id);
++  assert.ok(e && e.studentId === null);
++  assert.strictEqual((await call('DELETE', `/api/students/${ctx.student.id}`)).status, 404);
++});
++test('delete: device with recorded events is blocked (409); empty device + venue can go', async () => {
++  assert.strictEqual((await call('DELETE', `/api/devices/${ctx.device.id}`)).status, 409);
++  const v = (await call('POST', '/api/venues', { name: 'Temp' })).json;
++  const d = (await call('POST', '/api/devices', { venue_id: v.id, name: 'Temp dev' })).json;
++  assert.strictEqual((await call('DELETE', `/api/devices/${d.id}`)).status, 204);
++  assert.strictEqual((await call('DELETE', `/api/venues/${v.id}`)).status, 204);
++});
+diff --git a/web_app/src/lib/api.js b/web_app/src/lib/api.js
+index d101ca6..9e85db9 100644
+--- a/web_app/src/lib/api.js
++++ b/web_app/src/lib/api.js
+@@ -1,6 +1,7 @@
+ import axios from 'axios';
+ 
+-const API_BASE_URL = 'https://smart-registration-system.onrender.com';
++// Set VITE_API_BASE_URL in .env.local to point the app at a local backend; defaults to the Render deployment.
++const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://smart-registration-system.onrender.com';
+ 
+ const api = {
+   async getDevices() {
+@@ -81,8 +82,9 @@ const api = {
+     const response = await axios.delete(`${API_BASE_URL}/api/students/${id}`);
+     return response.data;
+   },
+-  async getAccessEvents() {
+-    const response = await axios.get(`${API_BASE_URL}/api/access-events`);
++  // params (optional): { from, to, limit } — ISO timestamps; see GET /api/access-events
++  async getAccessEvents(params = {}) {
++    const response = await axios.get(`${API_BASE_URL}/api/access-events`, { params });
+     return response.data;
+   },
+   async overrideEvent(eventId, invigilatorId, reason) {
+diff --git a/web_app/src/pages/Dashboard.jsx b/web_app/src/pages/Dashboard.jsx
+index 52273cb..23c135b 100644
+--- a/web_app/src/pages/Dashboard.jsx
++++ b/web_app/src/pages/Dashboard.jsx
+@@ -170,7 +170,16 @@ export default function Dashboard() {
+   const fetchDashboard = useCallback(async (manual = false) => {
+     if (manual) setRefreshing(true);
+     try {
+-      const data = await api.getAccessEvents();
++      // Ask the server for the selected local day (the API only returns the latest 100 otherwise)
++      const params = { limit: 500 };
++      if (dateFilter) {
++        const start = new Date(`${dateFilter}T00:00:00`);
++        const end = new Date(start);
++        end.setDate(end.getDate() + 1);
++        params.from = start.toISOString();
++        params.to = end.toISOString();
++      }
++      const data = await api.getAccessEvents(params);
+       setEvents(Array.isArray(data) ? data.map(normalizeEvent) : []);
+       setConnectionStatus('live');
+       setLastUpdated(Date.now());
+@@ -193,7 +202,7 @@ export default function Dashboard() {
+       console.error('Failed to load dashboard analytics:', error);
+       setStatsWarning('Analytics could not be refreshed. Showing available event data where possible.');
+     }
+-  }, []);
++  }, [dateFilter]);
+ 
+   useEffect(() => {
+     fetchDashboard();
+diff --git a/web_app/src/pages/Enroll.jsx b/web_app/src/pages/Enroll.jsx
+index 5971276..244ad0d 100644
+--- a/web_app/src/pages/Enroll.jsx
++++ b/web_app/src/pages/Enroll.jsx
+@@ -5,9 +5,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+ import { Input } from '@/components/ui/input';
+ import { Button } from '@/components/ui/button';
+ import { Badge } from '@/components/ui/badge';
++import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+ import { api } from '@/lib/api';
+-import { UserPlus, CheckCircle2, Info, AlertCircle, Loader2, ArrowRight, XCircle, RefreshCcw } from 'lucide-react';
++import { UserPlus, CheckCircle2, Info, AlertCircle, Loader2, XCircle, RefreshCcw } from 'lucide-react';
+ 
+ function TableSkeleton() {
+   return (
+diff --git a/web_app/vite.config.js b/web_app/vite.config.js
+index aa4b5a1..f81a197 100644
+--- a/web_app/vite.config.js
++++ b/web_app/vite.config.js
+@@ -1,3 +1,4 @@
++/* global process */
+ import { defineConfig } from 'vite';
+ import react from '@vitejs/plugin-react';
+ import tailwindcss from '@tailwindcss/vite';
