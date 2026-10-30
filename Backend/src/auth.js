@@ -11,10 +11,14 @@ const pool = require('./db');
 const TOKEN_HOURS = parseInt(process.env.TOKEN_HOURS, 10) || 12;
 const SECRET = process.env.JWT_SECRET || '';
 
-// Auth is on only when JWT_SECRET is set. Until then the API stays open (as before) and warns.
-const authEnabled = SECRET.length > 0;
+// Sign-in is always on. The only way to run an open API is AUTH_DISABLED=true, set on purpose
+// (the test suite in test/api.test.js does this). A missing JWT_SECRET no longer silently opens the API.
+const authDisabled = process.env.AUTH_DISABLED === 'true';
+const authEnabled = !authDisabled;
 if (authEnabled && SECRET.length < 32) {
-  throw new Error('JWT_SECRET is too short: use at least 32 random characters.');
+  throw new Error(SECRET
+    ? 'JWT_SECRET is too short: use at least 32 random characters.'
+    : 'JWT_SECRET is not set. Set it to 32+ random characters (or AUTH_DISABLED=true for local tests only).');
 }
 
 // ---------- passwords ----------
@@ -104,7 +108,7 @@ async function gate(req, res, next) {
   }
 }
 
-// With sign-in off (no JWT_SECRET) everyone counts as admin, so nothing changes until it is switched on.
+// With sign-in off (AUTH_DISABLED=true, tests only) everyone counts as admin.
 const isAdmin = (req) => !authEnabled || req.user?.role === 'admin';
 function requireAdmin(req, res, next) {
   if (isAdmin(req)) return next();
@@ -114,7 +118,7 @@ function requireAdmin(req, res, next) {
 // Create the first account from ADMIN_EMAIL / ADMIN_PASSWORD when the users table is empty.
 async function seedAdmin() {
   if (!authEnabled) {
-    console.warn('⚠️  JWT_SECRET is not set: sign-in is DISABLED and the API is open. Set JWT_SECRET (32+ chars) to turn it on.');
+    console.warn('⚠️  AUTH_DISABLED=true: sign-in is OFF and the API is open. Never use this on a real server.');
     return;
   }
   const { rows } = await pool.query('SELECT COUNT(*)::int AS n FROM users');

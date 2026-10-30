@@ -9,11 +9,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Badge } from '@/components/ui/badge';
 import ConfirmDeleteDialog from '@/components/ConfirmDeleteDialog';
 import { api } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import { ArrowLeft, Eye, Copy } from 'lucide-react';
 
 export default function DeviceDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { isAdmin } = useAuth(); // the server only sends api_key to administrators
   const [device, setDevice] = useState(null);
   const [venues, setVenues] = useState([]);
   const [name, setName] = useState('');
@@ -70,16 +72,16 @@ export default function DeviceDetail() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Edit Device</CardTitle>
+          <CardTitle>{isAdmin ? 'Edit Device' : 'Device'}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-2">
             <label className="text-sm font-medium">Device Name</label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} />
+            <Input value={name} onChange={(e) => setName(e.target.value)} disabled={!isAdmin} />
           </div>
           <div className="space-y-2">
             <label className="text-sm font-medium">Assigned Venue</label>
-            <Select value={venueId} onValueChange={setVenueId} items={venues.map((v) => ({ value: String(v.id), label: v.name }))}>
+            <Select value={venueId} onValueChange={setVenueId} disabled={!isAdmin} items={venues.map((v) => ({ value: String(v.id), label: v.name }))}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 {venues.map((v) => (
@@ -88,7 +90,7 @@ export default function DeviceDetail() {
               </SelectContent>
             </Select>
           </div>
-          <div className="flex items-center gap-3 p-3 bg-muted rounded-lg">
+          {isAdmin && device.api_key && <div className="flex items-center gap-3 p-3 bg-muted rounded-lg">
             <span className="text-sm font-medium">API Key:</span>
             <code className="text-sm font-mono flex-1">{showKey ? device.api_key : '••••••••••••••••••••' }</code>
             <Button
@@ -110,11 +112,11 @@ export default function DeviceDetail() {
             >
               <Copy size={14} /> Copy
             </Button>
-          </div>
-          <div className="flex gap-2">
+          </div>}
+          {isAdmin && <div className="flex gap-2">
             <Button onClick={handleSave}>Save Changes</Button>
             <ConfirmDeleteDialog itemName="this device" onConfirm={handleDelete} />
-          </div>
+          </div>}
         </CardContent>
       </Card>
 

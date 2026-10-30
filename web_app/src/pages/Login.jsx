@@ -37,7 +37,7 @@ export default function Login() {
         <CardHeader className="items-center space-y-2 text-center">
           <span className="rounded-md bg-primary/10 p-3 text-primary"><ShieldCheck size={26} /></span>
           <CardTitle>SRS Console</CardTitle>
-          <p className="text-sm text-muted-foreground">Sign in with your invigilator account.</p>
+          <p className="text-sm text-muted-foreground">Sign in as an administrator or invigilator.</p>
         </CardHeader>
         <CardContent>
           <form onSubmit={submit} className="space-y-4">

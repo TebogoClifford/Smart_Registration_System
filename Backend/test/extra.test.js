@@ -1,5 +1,5 @@
 // Extra API tests: edits, validation edge cases, stats arithmetic, limits.
-// Run with: BASE_URL=http://localhost:3111 node --test test/extra.test.js
+// Against an AUTH_DISABLED=true server, run with: BASE_URL=http://localhost:3111 node --test test/extra.test.js
 const { test } = require('node:test');
 const assert = require('node:assert');
 

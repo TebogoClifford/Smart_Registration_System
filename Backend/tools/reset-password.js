@@ -1,31 +1,25 @@
-const pool = require('./db');
-const auth = require('./auth');
-const crypto = require('crypto');
+// reset-password.js — set a new password for an existing account from the command line.
+//   node tools/reset-password.js <email> <new-password>
+// It talks to whatever database DATABASE_URL points at, so run it deliberately.
+require('dotenv').config({ quiet: true });
+const pool = require('../src/db');
+const { hashPassword } = require('../src/auth');
 
-async function resetPassword(email, newPassword) {
-  try {
-    const hashed = await auth.hashPassword(newPassword);
-    const result = await pool.query(
-      'UPDATE users SET password_hash = $1 WHERE email = $2 RETURNING id',
-      [hashed, email.toLowerCase()]
-    );
-    if (result.rows.length === 0) {
-      console.error(`Error: User with email ${email} not found.`);
-      process.exit(1);
-    }
-    console.log(`✅ Password successfully reset for ${email}`);
-  } catch (err) {
-    console.error('Unexpected error during password reset:', err);
+async function main() {
+  const [email, password] = process.argv.slice(2);
+  if (!email || !password) {
+    console.log('Usage: node tools/reset-password.js <email> <new-password>');
     process.exit(1);
   }
+  if (password.length < 8) { console.error('password must be at least 8 characters'); process.exit(1); }
+  const { rows } = await pool.query(
+    'UPDATE users SET password_hash = $1 WHERE email = $2 RETURNING id, role',
+    [await hashPassword(password), email.trim().toLowerCase()]
+  );
+  if (rows.length === 0) { console.error(`No account with email ${email}.`); process.exitCode = 1; }
+  else console.log(`✅ Password reset for ${email} (${rows[0].role})`);
 }
 
-const email = process.argv[2];
-const password = process.argv[3];
-
-if (!email || !password) {
-  console.log('Usage: node tools/reset-password.js <email> <new-password>');
-  process.exit(1);
-}
-
-resetPassword(email, password);
+main()
+  .catch((err) => { console.error('Password reset failed:', err.message); process.exitCode = 1; })
+  .finally(() => pool.end());

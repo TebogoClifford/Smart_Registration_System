@@ -11,6 +11,7 @@ Web console  ->  Backend (Render)  <-  PC program (this client)
 
 * `srs_client.py` – import this in your face-recognition program. Handles the device key, long timeouts (Render wakes up slowly), retries on network errors and 5xx answers, and duplicate-proof event uploads.
 * `simulator.py` – runs the whole device flow with no camera, to prove the console works with Python.
+* The real webcam program is [`../pc_device/srs_pc_app.py`](../pc_device/README.md).
 
 ## Try it (no hardware)
 
