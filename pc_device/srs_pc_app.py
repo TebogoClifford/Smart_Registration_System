@@ -11,28 +11,40 @@ It plays the ESP32-CAM's part (see Backend/DEVICE_API.md):
              network is back; the server ignores duplicates.
   * ARDUINO (optional) - with --serial COM3 it writes 'G' (granted) or 'D' (denied) + newline.
 
+The window shows the camera top-right and the program's state (connection, exam session and
+seat list, enrolment progress, activity log) beside it. Pick the camera from the list under the
+video; the choice is saved in config.ini.
+
 Run:
   pip install -r requirements.txt
   python download_models.py                       (once)
-  python srs_pc_app.py --url http://localhost:3000 --device-id 1 --key <device key>
-  python srs_pc_app.py --check ...                (test the connection only, no camera)
+  python srs_pc_app.py                            (settings from config.ini)
+  python srs_pc_app.py --check                    (test the connection only, no camera)
 
-Settings can also come from config.ini next to this file (see config.example.ini) or from the
-environment variables BASE_URL, DEVICE_ID, DEVICE_KEY, CAMERA_INDEX, SERIAL_PORT.
-
-Keys in the camera window:  Q / Esc = quit,  S = skip (fail) the current enrolment.
+Settings can also come from the command line or the environment variables BASE_URL, DEVICE_ID,
+DEVICE_KEY, CAMERA_INDEX, SERIAL_PORT.
 """
 import argparse
 import configparser
 import json
 import os
 import queue
+import re
 import sys
 import threading
 import time
+import tkinter as tk
+from collections import deque
 from pathlib import Path
+from tkinter import ttk
 
 import cv2
+
+# hide OpenCV's harmless warnings (empty camera slots while scanning, dnn engine notes)
+try:
+    cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
+except AttributeError:
+    pass
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "device_client"))
@@ -41,7 +53,7 @@ from face_engine import FaceEngine, FaceStore  # noqa: E402
 
 DATA = HERE / "data"
 QUEUE_FILE = DATA / "event_queue.json"
-WINDOW = "SRS Door"
+CONFIG_FILE = HERE / "config.ini"
 
 ENROL_SAMPLES = 5            # embeddings averaged per enrolment
 ENROL_SAMPLE_GAP = 0.25      # seconds between samples
@@ -49,18 +61,24 @@ ENROL_TIMEOUT = 60           # seconds before an enrolment is reported as failed
 VERIFY_CONFIRM = 3           # same answer this many frames in a row before deciding
 SHOW_RESULT_SECONDS = 3
 SAME_PERSON_COOLDOWN = 15    # do not log the same student twice within this many seconds
+UNKNOWN_GONE_SECONDS = 2     # an unrecognised face is logged once, again only after it has left
 SESSION_REFRESH = 120        # seconds
 ROSTER_REFRESH = 300
+VIDEO_W, VIDEO_H = 640, 480  # size of the video panel
+
+LOG = deque(maxlen=300)      # shown in the window's activity panel
 
 
 def log(*args):
-    print(time.strftime("%H:%M:%S"), *args, flush=True)
+    line = " ".join([time.strftime("%H:%M:%S"), *map(str, args)])
+    print(line, flush=True)
+    LOG.append(line)
 
 
 # ---------------------------------------------------------------- settings
 def load_settings():
     ini = configparser.ConfigParser()
-    ini.read(HERE / "config.ini", encoding="utf-8")
+    ini.read(CONFIG_FILE, encoding="utf-8")
     cfg = ini["srs"] if ini.has_section("srs") else {}
 
     def pick(name, env, default=None):
@@ -71,7 +89,7 @@ def load_settings():
     p.add_argument("--device-id", default=pick("device_id", "DEVICE_ID"))
     p.add_argument("--key", default=pick("device_key", "DEVICE_KEY"))
     p.add_argument("--camera", default=pick("camera", "CAMERA_INDEX", "auto"),
-                   help="webcam index, or 'auto' for the first one that works")
+                   help="webcam index, or 'auto' (prefers an external USB camera over the built-in one)")
     p.add_argument("--serial", default=pick("serial_port", "SERIAL_PORT"), help="Arduino port, e.g. COM3")
     p.add_argument("--min-face", type=int, default=int(pick("min_face_px", "MIN_FACE_PX", "90")),
                    help="ignore faces narrower than this many pixels (= too far from the camera)")
@@ -80,6 +98,16 @@ def load_settings():
     if not a.device_id or not a.key:
         p.error("set --device-id and --key (an administrator copies the key from the device page in the web console)")
     return a
+
+
+def save_camera_choice(index):
+    """Remember the picked camera in config.ini, changing only the 'camera =' line (comments survive)."""
+    if not CONFIG_FILE.exists():
+        return
+    text = CONFIG_FILE.read_text(encoding="utf-8")
+    line = f"camera = {index}"
+    text = re.sub(r"(?m)^camera\s*=.*$", line, text) if re.search(r"(?m)^camera\s*=", text) else text.rstrip() + f"\n{line}\n"
+    CONFIG_FILE.write_text(text, encoding="utf-8")
 
 
 # ---------------------------------------------------------------- network worker
@@ -94,6 +122,7 @@ class Backend(threading.Thread):
         self.tasks = queue.Queue()        # one-off jobs from the camera thread (enrolment results)
         self.online = False
         self.last_error = ""
+        self.last_contact = None
         self.config = {}
         self.pending = []                 # [{studentId, studentNumber, name}]
         self.session = {"students": [], "slot": "", "date": ""}
@@ -147,11 +176,12 @@ class Backend(threading.Thread):
             self.events = [e for e in self.events if e["clientEventId"] not in done]
             self._save_queue()
 
-    # -- snapshots for the camera thread
+    # -- snapshots for the other threads
     def snapshot(self):
         with self.lock:
             return dict(online=self.online, error=self.last_error, pending=list(self.pending),
-                        session=self.session, queued=len(self.events))
+                        session=self.session, queued=len(self.events), config=dict(self.config),
+                        last_contact=self.last_contact)
 
     def run(self):
         last = {"hb": 0, "pend": 0, "session": 0, "roster": 0}
@@ -160,8 +190,10 @@ class Backend(threading.Thread):
             now = time.time()
             try:
                 if not self.config:
-                    self.config = self.client.config()
-                    log(f"connected as device {self.config['deviceId']} '{self.config['name']}' (venue {self.config['venueId']})")
+                    cfg = self.client.config()
+                    with self.lock:
+                        self.config = cfg
+                    log(f"connected as device {cfg['deviceId']} '{cfg['name']}' (venue {cfg['venueId']})")
                 while not self.tasks.empty():
                     job = self.tasks.get_nowait()
                     try:
@@ -200,13 +232,13 @@ class Backend(threading.Thread):
                     last["roster"] = now
                 self._flush_events()
                 with self.lock:
-                    self.online, self.last_error = True, ""
+                    self.online, self.last_error, self.last_contact = True, "", time.time()
             except SrsError as err:
                 with self.lock:
                     self.online, self.last_error = False, str(err)
                 log("backend problem:", err)
                 if err.status in (401, 404):
-                    log("check --device-id and --key: the server does not accept them")
+                    log("check device_id and device_key: the server does not accept them")
                 self.stop.wait(5)
                 continue
             except Exception as err:  # never let the worker die silently
@@ -218,18 +250,31 @@ class Backend(threading.Thread):
             self.stop.wait(1)
 
 
-# ---------------------------------------------------------------- camera helpers
-def open_camera(choice):
-    indexes = range(6) if str(choice).lower() == "auto" else [int(choice)]
-    for i in indexes:
-        cam = cv2.VideoCapture(i, cv2.CAP_DSHOW) if os.name == "nt" else cv2.VideoCapture(i)
+# ---------------------------------------------------------------- cameras
+def _open(index):
+    return cv2.VideoCapture(index, cv2.CAP_DSHOW) if os.name == "nt" else cv2.VideoCapture(index)
+
+
+def list_cameras(max_index=6, skip=None):
+    """[(index, width, height)] of the cameras that deliver a frame. `skip` = an index already open."""
+    found = []
+    for i in range(max_index):
+        if i == skip:
+            found.append((i, None, None))
+            continue
+        cam = _open(i)
         if cam.isOpened():
             ok, frame = cam.read()
             if ok and frame is not None:
-                log(f"using camera {i} ({frame.shape[1]}x{frame.shape[0]})")
-                return cam
+                found.append((i, frame.shape[1], frame.shape[0]))
         cam.release()
-    raise SystemExit("No working camera found. Plug in the webcam or pass --camera <index>.")
+    return found
+
+
+def auto_camera(cameras):
+    """Built-in laptop cameras are normally index 0 and a plugged-in USB webcam comes after it,
+    so 'auto' takes the highest working index."""
+    return cameras[-1][0] if cameras else None
 
 
 def open_serial(port):
@@ -245,29 +290,65 @@ def open_serial(port):
         return None
 
 
-def put_text(img, text, org, color=(255, 255, 255), scale=0.6, thick=2):
-    cv2.putText(img, text, org, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), thick + 3, cv2.LINE_AA)
-    cv2.putText(img, text, org, cv2.FONT_HERSHEY_SIMPLEX, scale, color, thick, cv2.LINE_AA)
-
-
 GREEN, RED, AMBER, WHITE = (60, 200, 60), (40, 40, 230), (0, 190, 255), (255, 255, 255)
 
 
-# ---------------------------------------------------------------- main loop
-class DoorApp:
-    def __init__(self, args):
+# ---------------------------------------------------------------- camera + face worker
+class DoorEngine(threading.Thread):
+    """Reads the camera, finds faces, runs enrolments and door decisions. The window only displays
+    what this thread publishes (latest frame + state), so slow face maths never freezes the GUI."""
+
+    def __init__(self, args, backend, store, client):
+        super().__init__(daemon=True)
         self.args = args
+        self.backend = backend
+        self.store = store
+        self.client = client
         self.engine = FaceEngine()
-        self.store = FaceStore(DATA / "faces")
-        self.client = SrsClient(args.url, args.device_id, args.key)
-        self.backend = Backend(self.client, self.store)
         self.arduino = open_serial(args.serial)
-        self.enrolling = None      # {"student", "started", "samples", "last", "frame"}
-        self.handled = set()       # enrolments finished here, until the server stops listing them
-        self.result = None         # (text, color, until)
-        self.streak = (None, 0)    # (candidate answer, how many frames in a row)
-        self.recent = {}           # studentId -> time last logged
-        self.face_gone_since = time.time()
+        self.lock = threading.Lock()
+        self.stop = threading.Event()
+        self.cameras = []              # filled by rescan()
+        self.camera_index = None       # the one open now
+        self.want_camera = None        # set by the window to switch
+        self.frame = None              # latest annotated frame (BGR) for the window
+        self.camera_error = ""
+        self.enrolling = None          # {"student", "started", "samples", "last", "frame"}
+        self.handled = set()           # enrolments finished here, until the server stops listing them
+        self.result = None             # (decision, text, until)
+        self.streak = (None, 0)        # (candidate answer, how many frames in a row)
+        self.recent = {}               # studentId -> time last logged
+        self.unknown_logged = False
+        self.face_seen_at = 0.0
+        self.skip_requested = False
+        self.history = deque(maxlen=50)  # (time, decision, who)
+
+    # -- called from the window thread
+    def request_camera(self, index):
+        self.want_camera = index
+
+    def request_skip(self):
+        self.skip_requested = True
+
+    def rescan(self):
+        cams = list_cameras(skip=self.camera_index)
+        with self.lock:
+            self.cameras = cams
+        log("cameras found: " + (", ".join(f"#{i}" for i, _, _ in cams) or "none"))
+        return cams
+
+    def state(self):
+        with self.lock:
+            enrol = None
+            e = self.enrolling  # read once: the camera thread may set it to None at any moment
+            if e:
+                enrol = dict(name=e["student"]["name"], number=e["student"]["studentNumber"],
+                             samples=len(e["samples"]), hint=e.get("hint", ""),
+                             seconds_left=max(0, int(ENROL_TIMEOUT - (time.time() - e["started"]))))
+            return dict(frame=self.frame, camera=self.camera_index, cameras=list(self.cameras),
+                        camera_error=self.camera_error, enrolling=enrol,
+                        result=self.result if self.result and time.time() < self.result[2] else None,
+                        faces_stored=len(self.store.people), history=list(self.history))
 
     # -- enrolment
     def _finish_enrolment(self, ok):
@@ -280,131 +361,398 @@ class DoorApp:
                 self.backend.tasks.put(lambda: self.client.upload_enrollment_image(sid, jpg.tobytes()))
         self.backend.report_enrollment(sid, ok)
         self.handled.add(sid)
-        self.result = (f"{'Enrolled' if ok else 'Enrolment failed'}: {st['name']}", GREEN if ok else RED, time.time() + SHOW_RESULT_SECONDS)
+        self.result = ("granted" if ok else "denied", f"{'Enrolled' if ok else 'Enrolment failed'}: {st['name']}",
+                       time.time() + SHOW_RESULT_SECONDS)
         log(("enrolled" if ok else "enrolment FAILED for"), st["studentNumber"], st["name"])
         self.enrolling = None
 
-    def _step_enrolment(self, frame, faces, view):
-        st = self.enrolling["student"]
-        elapsed = time.time() - self.enrolling["started"]
-        put_text(view, f"ENROLLING {st['name']} ({st['studentNumber']})", (10, 60), AMBER, 0.7)
-        if elapsed > ENROL_TIMEOUT:
+    def _step_enrolment(self, frame, faces):
+        e = self.enrolling
+        if self.skip_requested or time.time() - e["started"] > ENROL_TIMEOUT:
+            self.skip_requested = False
             return self._finish_enrolment(False)
         if len(faces) != 1:
-            put_text(view, "One person only, please look at the camera" if faces else "No face found - step in front of the camera", (10, 90), AMBER)
+            e["hint"] = "One person only, please look at the camera" if faces else "No face found: step in front of the camera"
             return
         face = faces[0]
         if face[2] < self.args.min_face:
-            put_text(view, "Come closer to the camera", (10, 90), AMBER)
+            e["hint"] = "Come closer to the camera"
             return
-        put_text(view, f"Hold still... {len(self.enrolling['samples'])}/{ENROL_SAMPLES}   (S = skip)", (10, 90), AMBER)
-        if time.time() - self.enrolling["last"] >= ENROL_SAMPLE_GAP:
-            self.enrolling["samples"].append(self.engine.embed(frame, face))
-            self.enrolling["last"] = time.time()
-            self.enrolling["frame"] = frame.copy()
-            if len(self.enrolling["samples"]) >= ENROL_SAMPLES:
+        e["hint"] = "Hold still..."
+        if time.time() - e["last"] >= ENROL_SAMPLE_GAP:
+            e["samples"].append(self.engine.embed(frame, face))
+            e["last"] = time.time()
+            e["frame"] = frame.copy()
+            if len(e["samples"]) >= ENROL_SAMPLES:
                 self._finish_enrolment(True)
 
     # -- door decisions
     def _decide(self, frame, faces, session):
-        if not faces:
+        """Returns the label to draw on the biggest face."""
+        now = time.time()
+        if not faces or faces[0][2] < self.args.min_face:
             self.streak = (None, 0)
-            return
+            if now - self.face_seen_at > UNKNOWN_GONE_SECONDS:
+                self.unknown_logged = False
+            return None
+        self.face_seen_at = now
         face = faces[0]
-        if face[2] < self.args.min_face:
-            self.streak = (None, 0)
-            return
         # match against EVERY face stored here, then check the seat list, so a stranger is never
         # "closest" to a seated student just because the real match was left out of the search
         sid, sim = self.store.best_match(self.engine.embed(frame, face))
-        seated = {s["studentId"]: s for s in session.get("students", [])}
+        person = self.store.people.get(sid) if sid is not None else None
+        label = person["name"] if person else "not recognised"
         answer = sid if sid is not None else "unknown"
         cand, n = self.streak
         self.streak = (answer, n + 1) if cand == answer else (answer, 1)
         if self.streak[1] < VERIFY_CONFIRM:
-            return
+            return label
         self.streak = (None, 0)
-        now = time.time()
-        if sid is not None and now - self.recent.get(sid, 0) < SAME_PERSON_COOLDOWN:
-            return
-        person = self.store.people.get(sid) if sid is not None else None
+        if sid is None:
+            if self.unknown_logged:
+                return label
+            self.unknown_logged = True
+        elif now - self.recent.get(sid, 0) < SAME_PERSON_COOLDOWN:
+            return label
+        seated = {s["studentId"]: s for s in session.get("students", [])}
         seat = seated.get(sid)
         if seat and seat.get("onThisDevice", True):
-            decision, text, color = "granted", f"GRANTED  {person['name']}  -  seat {seat['seatNumber']} ({seat['moduleCode']})", GREEN
+            decision, text = "granted", f"GRANTED  {person['name']}\nseat {seat['seatNumber']} · {seat['moduleCode']}"
         elif person:
-            decision, text, color = "denied", f"DENIED  {person['name']}  -  no seat in this session", RED
+            decision, text = "denied", f"DENIED  {person['name']}\nno seat in this session"
         else:
-            decision, text, color = "denied", "DENIED  -  face not recognised", RED
-        if sid is None and now - self.recent.get("unknown", 0) < 5:
-            return
-        self.recent[sid if sid is not None else "unknown"] = now
+            decision, text = "denied", "DENIED\nface not recognised"
+        if sid is not None:
+            self.recent[sid] = now
         self.backend.record(decision, sid)
         if self.arduino:
             try:
                 self.arduino.write(b"G\n" if decision == "granted" else b"D\n")
             except Exception as err:
                 log("Arduino write failed:", err)
-        self.result = (text, color, now + SHOW_RESULT_SECONDS)
-        log(decision.upper(), person["studentNumber"] if person else "-", f"similarity {sim:.2f}")
+        self.result = (decision, text, now + SHOW_RESULT_SECONDS)
+        who = f"{person['studentNumber']} {person['name']}" if person else "unknown face"
+        self.history.appendleft((time.strftime("%H:%M:%S"), decision, who))
+        log(decision.upper(), who, f"similarity {sim:.2f}")
+        return label
+
+    def _switch(self, cam, index):
+        if cam is not None:
+            cam.release()
+        new = _open(index)
+        ok = new.isOpened() and new.read()[0]
+        with self.lock:
+            if ok:
+                self.camera_index, self.camera_error = index, ""
+            else:
+                self.camera_error = f"camera #{index} did not deliver a picture"
+        if ok:
+            log(f"using camera #{index}")
+            return new
+        new.release()
+        log(f"camera #{index} failed")
+        return None
 
     def run(self):
-        log(f"backend {self.args.url}: waiting for it to answer (Render can take ~60 s to wake)...")
-        self.client.wait_until_up()
-        self.backend.start()
-        cam = open_camera(self.args.camera)
-        cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
-        try:
-            while True:
-                ok, frame = cam.read()
-                if not ok or frame is None:
-                    log("camera stopped sending frames")
-                    break
-                view = frame.copy()
-                faces = self.engine.detect(frame)
-                for f in faces:
-                    x, y, w, h = (int(v) for v in f[:4])
-                    cv2.rectangle(view, (x, y), (x + w, y + h), WHITE if w >= self.args.min_face else AMBER, 2)
-                snap = self.backend.snapshot()
-                self.handled &= {p["studentId"] for p in snap["pending"]}  # forget once the server agrees
-
-                showing = self.result and time.time() < self.result[2]
-                if self.enrolling is None:
-                    todo = [p for p in snap["pending"] if p["studentId"] not in self.handled]
-                    if todo and not showing:
-                        self.enrolling = {"student": todo[0], "started": time.time(), "samples": [], "last": 0, "frame": frame}
-                        log("enrolment requested:", todo[0]["studentNumber"], todo[0]["name"])
-                if self.enrolling:
-                    self._step_enrolment(frame, faces, view)
-                elif not showing:
-                    self._decide(frame, faces, snap["session"])
-
-                # status bar
-                s = snap["session"]
-                status = (f"{'ONLINE' if snap['online'] else 'OFFLINE'}  |  session {s.get('date', '?')} {s.get('slot', '')}"
-                          f"  |  {len(s.get('students', []))} seated  |  {len(self.store.people)} faces here  |  {snap['queued']} queued")
-                put_text(view, status, (10, 25), GREEN if snap["online"] else RED, 0.55, 1)
-                if not snap["online"] and snap["error"]:
-                    put_text(view, snap["error"][:90], (10, view.shape[0] - 15), RED, 0.5, 1)
-                if self.result and time.time() < self.result[2]:
-                    put_text(view, self.result[0], (10, view.shape[0] // 2), self.result[1], 0.8, 2)
-
-                cv2.imshow(WINDOW, view)
-                key = cv2.waitKey(1) & 0xFF
-                if key in (ord("q"), ord("Q"), 27):
-                    break
-                if key in (ord("s"), ord("S")) and self.enrolling:
-                    self._finish_enrolment(False)
-                if cv2.getWindowProperty(WINDOW, cv2.WND_PROP_VISIBLE) < 1:
-                    break
-        except KeyboardInterrupt:
-            pass
-        finally:
-            self.backend.stop.set()
+        cams = self.rescan()
+        choice = self.args.camera
+        start = auto_camera(cams) if str(choice).lower() == "auto" else int(choice)
+        if start is None:
+            with self.lock:
+                self.camera_error = "No camera found. Plug in the webcam and press Rescan."
+        cam = self._switch(None, start) if start is not None else None
+        while not self.stop.is_set():
+            if self.want_camera is not None:
+                cam = self._switch(cam, self.want_camera)
+                self.want_camera = None
+            if cam is None:
+                self.stop.wait(0.3)
+                continue
+            ok, frame = cam.read()
+            if not ok or frame is None:
+                with self.lock:
+                    self.camera_error = "The camera stopped sending pictures. Pick a camera or press Rescan."
+                cam.release()
+                cam = None
+                continue
+            faces = self.engine.detect(frame)
+            snap = self.backend.snapshot()
+            self.handled &= {p["studentId"] for p in snap["pending"]}  # forget once the server agrees
+            showing = self.result and time.time() < self.result[2]
+            label = None
+            # no lock here: face maths is slow and the window must never wait for it.
+            # state() only reads whole attributes, which are swapped atomically.
+            if self.enrolling is None:
+                todo = [p for p in snap["pending"] if p["studentId"] not in self.handled]
+                if todo and not showing:
+                    self.enrolling = {"student": todo[0], "started": time.time(), "samples": [], "last": 0, "frame": frame}
+                    log("enrolment requested:", todo[0]["studentNumber"], todo[0]["name"])
+            if self.enrolling:
+                self._step_enrolment(frame, faces)
+            elif not showing:
+                label = self._decide(frame, faces, snap["session"])
+            view = frame
+            for n, f in enumerate(faces):
+                x, y, w, h = (int(v) for v in f[:4])
+                color = WHITE if w >= self.args.min_face else AMBER
+                cv2.rectangle(view, (x, y), (x + w, y + h), color, 2)
+                if n == 0 and label:
+                    cv2.putText(view, label, (x, max(20, y - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 4, cv2.LINE_AA)
+                    cv2.putText(view, label, (x, max(20, y - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA)
+            with self.lock:
+                self.frame = view
+        if cam is not None:
             cam.release()
-            cv2.destroyAllWindows()
-            if self.arduino:
-                self.arduino.close()
-            log(f"stopped ({len(self.backend.events)} event(s) still queued; they upload next time)")
+        if self.arduino:
+            self.arduino.close()
+
+
+# ---------------------------------------------------------------- window
+BG, PANEL, INK, MUTED = "#f4f6f9", "#ffffff", "#1f2937", "#6b7280"
+OK_BG, BAD_BG, WARN_BG, IDLE_BG = "#16a34a", "#dc2626", "#d97706", "#e5e7eb"
+
+
+class DoorWindow:
+    def __init__(self, args, door, backend):
+        self.args, self.door, self.backend = args, door, backend
+        self.root = root = tk.Tk()
+        root.title("SRS Door")
+        root.configure(bg=BG)
+        root.geometry("1240x760")
+        root.minsize(1080, 680)
+        style = ttk.Style(root)
+        style.theme_use("clam")
+        style.configure(".", background=BG, foreground=INK, font=("Segoe UI", 10))
+        style.configure("Panel.TLabelframe", background=PANEL, bordercolor="#d1d5db")
+        style.configure("Panel.TLabelframe.Label", background=BG, foreground=INK, font=("Segoe UI Semibold", 10))
+        style.configure("P.TLabel", background=PANEL)
+        style.configure("Muted.TLabel", background=PANEL, foreground=MUTED)
+        style.configure("Treeview", rowheight=22, font=("Segoe UI", 9))
+        style.configure("Treeview.Heading", font=("Segoe UI Semibold", 9))
+        style.configure("Enrol.Horizontal.TProgressbar", troughcolor=IDLE_BG, background=OK_BG)
+
+        root.columnconfigure(0, weight=1)
+        root.rowconfigure(1, weight=1)
+
+        # header
+        head = tk.Frame(root, bg=INK)
+        head.grid(row=0, column=0, columnspan=2, sticky="ew")
+        tk.Label(head, text="Smart Registration System · Door", bg=INK, fg="white",
+                 font=("Segoe UI Semibold", 14)).pack(side="left", padx=14, pady=10)
+        self.conn = tk.Label(head, text="CONNECTING…", bg=WARN_BG, fg="white", font=("Segoe UI Semibold", 10), padx=10, pady=3)
+        self.conn.pack(side="right", padx=14)
+        self.clock = tk.Label(head, text="", bg=INK, fg="#cbd5e1", font=("Segoe UI", 10))
+        self.clock.pack(side="right", padx=6)
+
+        # left: information panels
+        left = tk.Frame(root, bg=BG)
+        left.grid(row=1, column=0, sticky="nsew", padx=(12, 6), pady=12)
+        left.columnconfigure(0, weight=1)
+        left.rowconfigure(2, weight=1)
+        left.rowconfigure(3, weight=1)
+
+        dev = ttk.LabelFrame(left, text="Device", style="Panel.TLabelframe", padding=10)
+        dev.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        dev.columnconfigure(1, weight=1)
+        self.dev_vals = {}
+        for r, key in enumerate(["Server", "Device", "Venue", "Last contact", "Faces on this PC", "Queued events"]):
+            ttk.Label(dev, text=key, style="Muted.TLabel").grid(row=r, column=0, sticky="w", padx=(0, 12))
+            v = ttk.Label(dev, text="—", style="P.TLabel")
+            v.grid(row=r, column=1, sticky="w")
+            self.dev_vals[key] = v
+
+        enr = ttk.LabelFrame(left, text="Enrolment", style="Panel.TLabelframe", padding=10)
+        enr.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        enr.columnconfigure(0, weight=1)
+        self.enr_title = ttk.Label(enr, text="Waiting for the web console…", style="P.TLabel", font=("Segoe UI Semibold", 10))
+        self.enr_title.grid(row=0, column=0, sticky="w")
+        self.enr_hint = ttk.Label(enr, text="Start an enrolment on the web console's Enroll page.", style="Muted.TLabel")
+        self.enr_hint.grid(row=1, column=0, sticky="w", pady=(2, 6))
+        self.enr_bar = ttk.Progressbar(enr, maximum=ENROL_SAMPLES, style="Enrol.Horizontal.TProgressbar")
+        self.enr_bar.grid(row=2, column=0, sticky="ew")
+        self.skip_btn = ttk.Button(enr, text="Skip", command=door.request_skip, state="disabled")
+        self.skip_btn.grid(row=2, column=1, padx=(8, 0))
+
+        ses = ttk.LabelFrame(left, text="Exam session", style="Panel.TLabelframe", padding=10)
+        ses.grid(row=2, column=0, sticky="nsew", pady=(0, 8))
+        ses.columnconfigure(0, weight=1)
+        ses.rowconfigure(1, weight=1)
+        self.ses_title = ttk.Label(ses, text="—", style="P.TLabel")
+        self.ses_title.grid(row=0, column=0, sticky="w", pady=(0, 6))
+        cols = ("seat", "number", "name", "module")
+        self.seats = ttk.Treeview(ses, columns=cols, show="headings", height=6)
+        for c, w in zip(cols, (50, 110, 200, 80)):
+            self.seats.heading(c, text=c.capitalize())
+            self.seats.column(c, width=w, anchor="w", stretch=c == "name")
+        self.seats.grid(row=1, column=0, sticky="nsew")
+        self._session_key = None
+
+        act = ttk.LabelFrame(left, text="Activity", style="Panel.TLabelframe", padding=10)
+        act.grid(row=3, column=0, sticky="nsew")
+        act.columnconfigure(0, weight=1)
+        act.rowconfigure(0, weight=1)
+        self.log_box = tk.Listbox(act, font=("Consolas", 9), bg=PANEL, fg=INK, borderwidth=0, highlightthickness=0, activestyle="none")
+        self.log_box.grid(row=0, column=0, sticky="nsew")
+        sb = ttk.Scrollbar(act, command=self.log_box.yview)
+        sb.grid(row=0, column=1, sticky="ns")
+        self.log_box.config(yscrollcommand=sb.set)
+        self._log_len = 0
+
+        # right: video on top, then the decision banner and the camera picker
+        right = tk.Frame(root, bg=BG)
+        right.grid(row=1, column=1, sticky="n", padx=(6, 12), pady=12)
+        # a blank image keeps the panel 640x480 pixels even while only text is shown
+        self._blank = tk.PhotoImage(width=VIDEO_W, height=VIDEO_H)
+        self.video = tk.Label(right, bg="#111827", fg="#9ca3af", image=self._blank, borderwidth=0,
+                              text="Starting camera…", font=("Segoe UI", 12), compound="center", wraplength=VIDEO_W - 40)
+        self.video.grid(row=0, column=0, sticky="n")
+        self.banner = tk.Label(right, text="Ready", bg=IDLE_BG, fg=INK, font=("Segoe UI Semibold", 16),
+                               height=3, justify="center")
+        self.banner.grid(row=1, column=0, sticky="ew", pady=(8, 8))
+        camrow = tk.Frame(right, bg=BG)
+        camrow.grid(row=2, column=0, sticky="ew")
+        tk.Label(camrow, text="Camera", bg=BG, fg=INK).pack(side="left")
+        self.cam_pick = ttk.Combobox(camrow, state="readonly", width=34)
+        self.cam_pick.pack(side="left", padx=8)
+        self.cam_pick.bind("<<ComboboxSelected>>", self._pick_camera)
+        self.rescan_btn = ttk.Button(camrow, text="Rescan", command=self._rescan)
+        self.rescan_btn.pack(side="left")
+        self._cams_shown = None
+
+        self._photo = None
+        self._tick_n = 0
+        root.protocol("WM_DELETE_WINDOW", self.close)
+        root.bind("<Escape>", lambda _e: self.close())
+
+    # -- camera picker
+    def _pick_camera(self, _event=None):
+        i = self.cam_pick.current()
+        cams = self.door.state()["cameras"]
+        if 0 <= i < len(cams):
+            index = cams[i][0]
+            self.door.request_camera(index)
+            save_camera_choice(index)
+
+    def _rescan(self):
+        self.rescan_btn.config(state="disabled", text="Scanning…")
+
+        def work():
+            self.door.rescan()
+            self.root.after(0, lambda: self.rescan_btn.config(state="normal", text="Rescan"))
+        threading.Thread(target=work, daemon=True).start()
+
+    # -- refresh
+    def _show_frame(self, frame, error):
+        if frame is None:
+            self.video.config(image=self._blank, text=error or "Starting camera…")
+            self._photo = None
+            return
+        h, w = frame.shape[:2]
+        scale = min(VIDEO_W / w, VIDEO_H / h)
+        if scale != 1:
+            frame = cv2.resize(frame, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        h, w = rgb.shape[:2]
+        # Tk reads PPM natively, so no Pillow is needed
+        self._photo = tk.PhotoImage(width=w, height=h, data=b"P6 %d %d 255 " % (w, h) + rgb.tobytes(), format="PPM")
+        self.video.config(image=self._photo, text="")
+
+    def _refresh_panels(self, st, snap):
+        cfg = snap["config"]
+        self.clock.config(text=time.strftime("%a %d %b  %H:%M:%S"))
+        if snap["online"]:
+            self.conn.config(text="ONLINE", bg=OK_BG)
+        elif snap["error"]:
+            self.conn.config(text="OFFLINE", bg=BAD_BG)
+        self.dev_vals["Server"].config(text=self.args.url)
+        self.dev_vals["Device"].config(text=f"#{cfg['deviceId']}  {cfg['name']}" if cfg else f"#{self.args.device_id}")
+        self.dev_vals["Venue"].config(text=f"#{cfg['venueId']}" if cfg else "—")
+        lc = snap["last_contact"]
+        self.dev_vals["Last contact"].config(text=f"{int(time.time() - lc)} s ago" if lc else (snap["error"][:60] or "—"))
+        self.dev_vals["Faces on this PC"].config(text=str(st["faces_stored"]))
+        self.dev_vals["Queued events"].config(text=str(snap["queued"]))
+
+        e = st["enrolling"]
+        if e:
+            self.enr_title.config(text=f"Enrolling {e['name']} ({e['number']})")
+            self.enr_hint.config(text=f"{e['hint'] or 'Look at the camera'}   ·   {e['seconds_left']} s left")
+            self.enr_bar.config(value=e["samples"])
+            self.skip_btn.config(state="normal")
+        else:
+            waiting = len(snap["pending"])
+            self.enr_title.config(text=f"{waiting} enrolment(s) waiting" if waiting else "Waiting for the web console…")
+            self.enr_hint.config(text="Start an enrolment on the web console's Enroll page.")
+            self.enr_bar.config(value=0)
+            self.skip_btn.config(state="disabled")
+
+        s = snap["session"]
+        key = (s.get("date"), s.get("slot"), tuple(x["studentId"] for x in s.get("students", [])))
+        if key != self._session_key:
+            self._session_key = key
+            students = s.get("students", [])
+            self.ses_title.config(text=f"{s.get('date') or '—'}  {s.get('slot') or ''}   ·   {len(students)} seated"
+                                  + ("" if students else "   (no exam booked in this venue now)"))
+            self.seats.delete(*self.seats.get_children())
+            for x in sorted(students, key=lambda x: x["seatNumber"]):
+                self.seats.insert("", "end", values=(x["seatNumber"], x["studentNumber"], x["name"], x["moduleCode"]))
+
+        cams = st["cameras"]
+        if (cams, st["camera"]) != self._cams_shown:
+            self._cams_shown = (cams, st["camera"])
+            labels = [f"#{i}" + (f"  {w}x{h}" if w else "  (in use)") + ("  · built-in?" if i == 0 and len(cams) > 1 else "")
+                      for i, w, h in cams]
+            self.cam_pick.config(values=labels)
+            idx = next((n for n, c in enumerate(cams) if c[0] == st["camera"]), -1)
+            if idx >= 0:
+                self.cam_pick.current(idx)
+            else:
+                self.cam_pick.set("no camera" if not cams else "pick a camera")
+
+        if len(LOG) != self._log_len or (LOG and self.log_box.get(0) != LOG[-1]):
+            self.log_box.delete(0, "end")
+            for line in reversed(LOG):
+                self.log_box.insert("end", line)
+            self._log_len = len(LOG)
+
+    def _refresh_banner(self, st):
+        r = st["result"]
+        if r:
+            self.banner.config(text=r[1], bg=OK_BG if r[0] == "granted" else BAD_BG, fg="white")
+        elif st["enrolling"]:
+            self.banner.config(text=f"Enrolling {st['enrolling']['name']}", bg=WARN_BG, fg="white")
+        else:
+            self.banner.config(text="Ready · look at the camera", bg=IDLE_BG, fg=INK)
+
+    def tick(self):
+        st = self.door.state()
+        self._show_frame(st["frame"], st["camera_error"])
+        self._refresh_banner(st)
+        if self._tick_n % 8 == 0:      # panels ~4 times a second is plenty
+            self._refresh_panels(st, self.backend.snapshot())
+        self._tick_n += 1
+        self.root.after(30, self.tick)
+
+    def run(self):
+        self.root.after(50, self.tick)
+        self.root.mainloop()
+
+    def close(self):
+        self.door.stop.set()
+        self.backend.stop.set()
+        self.root.destroy()
+
+
+def run_gui(args):
+    store = FaceStore(DATA / "faces")
+    client = SrsClient(args.url, args.device_id, args.key)
+    backend = Backend(client, store)
+    door = DoorEngine(args, backend, store, client)
+    log(f"backend {args.url}; device #{args.device_id}")
+    backend.start()   # waits out a sleeping Render server by itself (shows OFFLINE until it answers)
+    door.start()
+    DoorWindow(args, door, backend).run()
+    door.join(timeout=3)
+    log(f"stopped ({len(backend.events)} event(s) still queued; they upload next time)")
 
 
 def check(args):
@@ -422,12 +770,16 @@ def check(args):
     store = FaceStore(DATA / "faces")
     log(f"faces stored on this PC: {len(store.people)}")
     FaceEngine()
-    log("face models load OK. Everything is ready.")
+    log("face models load OK.")
+    cams = list_cameras()
+    log("cameras: " + (", ".join(f"#{i} {w}x{h}" for i, w, h in cams) or "none found")
+        + (f"  (auto picks #{auto_camera(cams)})" if cams else ""))
+    log("Everything is ready.")
 
 
 if __name__ == "__main__":
     settings = load_settings()
     try:
-        check(settings) if settings.check else DoorApp(settings).run()
+        check(settings) if settings.check else run_gui(settings)
     except SrsError as e:
         raise SystemExit(f"Backend refused: {e}")

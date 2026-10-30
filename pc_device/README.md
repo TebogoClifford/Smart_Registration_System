@@ -22,9 +22,11 @@ An **administrator** finds the device id and key on the device's page in the web
 ## Run
 ```
 python srs_pc_app.py --check       # tests URL + key + models, no camera
-python srs_pc_app.py               # opens the camera window
+python srs_pc_app.py               # opens the door window
 ```
-Keys in the window: **Q**/**Esc** quit, **S** skip (fail) the current enrolment.
+The window shows the camera top-right with the GRANTED / DENIED banner under it, and on the left the device and connection, the enrolment in progress (with a **Skip** button), the current exam session's seat list and an activity log. Close the window or press **Esc** to stop.
+
+**Choosing the camera:** pick it from the **Camera** list under the video (press **Rescan** after plugging a webcam in). The choice is saved in `config.ini`. With `camera = auto` the highest-numbered camera is used, which is normally a USB webcam rather than the laptop's built-in one.
 
 Options (or in `config.ini`): `--url`, `--device-id`, `--key`, `--camera 0` (default `auto`), `--serial COM3` (Arduino: receives `G` or `D` + newline), `--min-face 90` (pixels; raise it to make people step closer).
 
