@@ -2,14 +2,19 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../db');
 const crypto = require('crypto');
-const { validateIdParam, isId, handleDbError, keyMatches, LIVE_STATUS } = require('../http');
+const { validateIdParam, isId, handleDbError, LIVE_STATUS } = require('../http');
+const { requireDevice } = require('../deviceAuth');
+const auth = require('../auth');
+const { SLOTS, isValidDate } = require('../bookings');
+
+const BATCH_MAX = 100; // keep in step with routes/accessEvents.js
 
 router.param('id', validateIdParam);
 
 
 
 // POST /api/devices — register a device against a venue
-router.post('/', async (req, res) => {
+router.post('/', auth.requireAdmin, async (req, res) => {
   const { venue_id, name } = (req.body ?? {});
   if (!venue_id || !name) {
     return res.status(400).json({ error: 'venue_id and name are required' });
@@ -49,14 +54,16 @@ router.get('/:id', async (req, res) => {
       [req.params.id]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'device not found' });
-    res.json(result.rows[0]);
+    const device = result.rows[0];
+    if (!auth.isAdmin(req)) delete device.api_key; // the device key is a secret: administrators only
+    res.json(device);
   } catch (err) {
     handleDbError(res, err);
   }
 });
 
 // PUT /api/devices/:id — edit name/venue assignment
-router.put('/:id', async (req, res) => {
+router.put('/:id', auth.requireAdmin, async (req, res) => {
   const { id } = req.params;
   const { name, venue_id } = (req.body ?? {});
   if (!name || !venue_id) return res.status(400).json({ error: 'name and venue_id are required' });
@@ -74,7 +81,7 @@ router.put('/:id', async (req, res) => {
 });
 
 // DELETE /api/devices/:id — blocked if students are enrolled on this device
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', auth.requireAdmin, async (req, res) => {
   const { id } = req.params;
   try {
     const studentCheck = await pool.query('SELECT id FROM students WHERE device_id = $1', [id]);
@@ -98,20 +105,99 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// POST /api/devices/heartbeat — device reports it is alive.
-// Requires the device's api_key in the X-Device-Key header (design: shared secret on each request).
-router.post('/heartbeat', async (req, res) => {
-  const { deviceId } = (req.body ?? {});
-  if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
-  if (!isId(deviceId)) return res.status(400).json({ error: 'deviceId must be a positive integer' });
+// POST /api/devices/heartbeat — device reports it is alive (also refreshed by every other device call).
+// Needs deviceId in the body and the device's key in the X-Device-Key header.
+router.post('/heartbeat', requireDevice, (req, res) => {
+  res.json({ status: 'ok', serverTime: new Date().toISOString() });
+});
+
+// ---------- device-facing endpoints (authenticated with X-Device-Key, see deviceAuth.js) ----------
+const envInt = (name, fallback) => {
+  const n = parseInt(process.env[name], 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+};
+
+// GET /api/devices/:id/config — settings the device reads at boot, so they can be tuned
+// from the server without re-flashing firmware.
+router.get('/:id/config', requireDevice, (req, res) => {
+  res.json({
+    deviceId: req.device.id,
+    name: req.device.name,
+    venueId: req.device.venue_id,
+    captureDistanceCm: envInt('DEVICE_CAPTURE_DISTANCE_CM', 30),
+    heartbeatIntervalSeconds: envInt('DEVICE_HEARTBEAT_SECONDS', 30),
+    enrollmentPollSeconds: envInt('DEVICE_ENROLL_POLL_SECONDS', 3),
+    eventBatchMax: BATCH_MAX,
+    serverTime: new Date().toISOString(),
+  });
+});
+
+// GET /api/devices/:id/pending-enrollments — students an invigilator has asked this device to
+// capture. The device polls this (the design is HTTP-only, so the server cannot push).
+// Requests older than ENROLL_REQUEST_TTL_SECONDS (default 10 min) are ignored as abandoned.
+router.get('/:id/pending-enrollments', requireDevice, async (req, res) => {
   try {
-    const device = await pool.query('SELECT id, api_key FROM devices WHERE id = $1', [deviceId]);
-    if (device.rows.length === 0) return res.status(404).json({ error: 'device not found' });
-    if (!keyMatches(req.get('X-Device-Key'), device.rows[0].api_key)) {
-      return res.status(401).json({ error: 'invalid or missing device key' });
-    }
-    await pool.query('UPDATE devices SET last_seen = NOW() WHERE id = $1', [deviceId]);
-    res.json({ status: 'ok' });
+    const { rows } = await pool.query(
+      `SELECT id AS "studentId", student_number AS "studentNumber", name
+       FROM students
+       WHERE device_id = $1 AND enrollment_status = 'pending'
+         AND enrollment_requested_at > NOW() - make_interval(secs => $2)
+       ORDER BY enrollment_requested_at, id`,
+      [req.device.id, envInt('ENROLL_REQUEST_TTL_SECONDS', 600)]
+    );
+    res.json(rows);
+  } catch (err) {
+    handleDbError(res, err);
+  }
+});
+
+// GET /api/devices/:id/roster — students currently enrolled on this device. Face data lives on the
+// device, so it compares this list with its stored faces and deletes any that are no longer listed
+// (for example after a student record was removed in the web app).
+router.get('/:id/roster', requireDevice, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id AS "studentId", student_number AS "studentNumber", name
+       FROM students WHERE device_id = $1 AND enrollment_status = 'enrolled' ORDER BY id`,
+      [req.device.id]
+    );
+    res.json(rows);
+  } catch (err) {
+    handleDbError(res, err);
+  }
+});
+
+// The exam session a device should serve right now. Before 12:00 local time it is the 09:00 slot,
+// from 12:00 onwards the 13:00 slot (EXAM_TIMEZONE, default Africa/Johannesburg).
+function currentSession() {
+  const tz = process.env.EXAM_TIMEZONE || 'Africa/Johannesburg';
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23' })
+    .formatToParts(new Date()).reduce((o, p) => ({ ...o, [p.type]: p.value }), {});
+  return { date: `${parts.year}-${parts.month}-${parts.day}`, slot: Number(parts.hour) < 12 ? SLOTS[0] : SLOTS[1] };
+}
+
+// GET /api/devices/:id/session[?date=YYYY-MM-DD&slot=09:00] — who may enter this venue in this session.
+// Only students with a reserved seat are listed; the device denies everyone else.
+// `onThisDevice` is true when the student's face is enrolled on THIS device.
+router.get('/:id/session', requireDevice, async (req, res) => {
+  const now = currentSession();
+  const date = req.query.date ?? now.date;
+  const slot = req.query.slot ?? now.slot;
+  if (!isValidDate(date)) return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+  if (!SLOTS.includes(slot)) return res.status(400).json({ error: `slot must be one of ${SLOTS.join(', ')}` });
+  try {
+    const { rows } = await pool.query(
+      `SELECT s.id AS "studentId", s.student_number AS "studentNumber", s.name, r.seat_number AS "seatNumber",
+              m.code AS "moduleCode", (s.device_id = $1 AND s.enrollment_status = 'enrolled') AS "onThisDevice"
+       FROM seat_reservations r
+       JOIN students s ON s.id = r.student_id
+       JOIN exam_bookings b ON b.id = r.booking_id
+       JOIN modules m ON m.id = b.module_id
+       WHERE r.venue_id = $2 AND r.exam_date = $3 AND r.slot = $4
+       ORDER BY r.seat_number`,
+      [req.device.id, req.device.venue_id, date, slot]
+    );
+    res.json({ venueId: req.device.venue_id, date, slot, serverTime: new Date().toISOString(), students: rows });
   } catch (err) {
     handleDbError(res, err);
   }

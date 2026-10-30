@@ -25,12 +25,12 @@ test('health check', async () => {
 
 // ---------- venues ----------
 test('venue: create / list / edit', async () => {
-  let r = await call('POST', '/api/venues', { name: 'Exam Hall A' });
+  let r = await call('POST', '/api/venues', { name: 'Exam Hall A', capacity: 50 });
   assert.strictEqual(r.status, 201);
   ctx.venue = r.json;
   r = await call('GET', '/api/venues');
   assert.ok(r.json.some((v) => v.id === ctx.venue.id));
-  r = await call('PUT', `/api/venues/${ctx.venue.id}`, { name: 'Exam Hall B' });
+  r = await call('PUT', `/api/venues/${ctx.venue.id}`, { name: 'Exam Hall B', capacity: 50 });
   assert.strictEqual(r.json.name, 'Exam Hall B');
 });
 test('venue: missing name -> 400', async () => {
@@ -41,7 +41,7 @@ test('venue: non-numeric id -> 400/404, not 500', async () => {
   assert.ok([400, 404].includes(r.status), `got ${r.status}`);
 });
 test('venue: unknown id -> 404', async () => {
-  assert.strictEqual((await call('PUT', '/api/venues/999999', { name: 'x' })).status, 404);
+  assert.strictEqual((await call('PUT', '/api/venues/999999', { name: 'x', capacity: 10 })).status, 404);
 });
 
 // ---------- devices ----------
@@ -155,10 +155,10 @@ test('event: override is recorded and visible on the event', async () => {
   assert.strictEqual(r.status, 200);
   r = await call('GET', '/api/access-events');
   const e = r.json.find((x) => x.id === ctx.event.id);
-  assert.ok(e.overridden, 'event does not show override');
+  assert.ok(e.overridden, 'event does not override');
 });
 test('event: override unknown event -> 404', async () => {
-  const r = await call('POST', '/api/access-events/999999/override', { invigilatorId: 'a', reason: 'b' });
+  const r = await call('POST', '/api/access-events/999999/override', { invigilatorId: 'a', reason: 'b'});
   assert.strictEqual(r.status, 404);
 });
 
@@ -211,7 +211,7 @@ test('delete: student removed, access history kept with null student', async () 
 });
 test('delete: device with recorded events is blocked (409); empty device + venue can go', async () => {
   assert.strictEqual((await call('DELETE', `/api/devices/${ctx.device.id}`)).status, 409);
-  const v = (await call('POST', '/api/venues', { name: 'Temp' })).json;
+  const v = (await call('POST', '/api/venues', { name: 'Temp', capacity: 50 })).json;
   const d = (await call('POST', '/api/devices', { venue_id: v.id, name: 'Temp dev' })).json;
   assert.strictEqual((await call('DELETE', `/api/devices/${d.id}`)).status, 204);
   assert.strictEqual((await call('DELETE', `/api/venues/${v.id}`)).status, 204);

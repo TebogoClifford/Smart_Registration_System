@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { api } from '@/lib/api';
@@ -32,6 +32,8 @@ export default function StudentList() {
                 <TableRow>
                   <TableHead>Student Number</TableHead>
                   <TableHead>Name</TableHead>
+                  <TableHead>Course</TableHead>
+                  <TableHead>Modules</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Action</TableHead>
                 </TableRow>
@@ -41,6 +43,8 @@ export default function StudentList() {
                   <TableRow key={s.id} className="group">
                     <TableCell className="font-mono text-xs">{s.student_number}</TableCell>
                     <TableCell className="font-medium">{s.name}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{s.course_name || '—'}</TableCell>
+                    <TableCell className="text-xs">{s.modules?.length ? s.modules.map((m) => m.code).join(', ') : '—'}</TableCell>
                     <TableCell>
                       <Badge variant={s.enrollment_status === 'enrolled' ? 'default' : 'secondary'}>
                         {s.enrollment_status}
@@ -67,7 +71,7 @@ export default function StudentList() {
 }
 
 // Simple internal Button component for the table to avoid import errors if Button wasn't global
-function Button({ children, variant, size, onClick }) {
+function Button({ children, variant, onClick }) {
   return (
     <button
       onClick={onClick}

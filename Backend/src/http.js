@@ -13,13 +13,30 @@ function validateIdParam(req, res, next, value) {
 // True if v is a positive integer (number or numeric string).
 const isId = (v) => /^\d+$/.test(String(v)) && Number(v) > 0 && Number(v) <= 2147483647;
 
+// Express middleware: trim every top-level string in the JSON body, so "   " counts as empty
+// and stray spaces never end up in names or student numbers.
+function trimBody(req, res, next) {
+  if (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) {
+    for (const k of Object.keys(req.body)) {
+      if (typeof req.body[k] === 'string') req.body[k] = req.body[k].trim();
+    }
+  }
+  next();
+}
+
 // Map known Postgres errors to client errors; anything else is a real 500.
 function handleDbError(res, err) {
+  if (err.name === 'HttpError') { // HttpError from bookings.js: a deliberate, user-facing refusal
+    return res.status(err.status).json({ error: err.message, ...(err.extra || {}) });
+  }
   if (err.code === '23503') { // foreign_key_violation
     return res.status(400).json({ error: 'a referenced venue, device or student does not exist' });
   }
   if (err.code === '23505') { // unique_violation
     return res.status(409).json({ error: 'a record with those details already exists' });
+  }
+  if (err.code === '22001') { // string_data_right_truncation (value longer than the column)
+    return res.status(400).json({ error: 'a field is too long' });
   }
   if (err.code === '22P02' || err.code === '22007' || err.code === '22008') { // bad input syntax / date
     return res.status(400).json({ error: 'one or more fields have an invalid format' });
@@ -43,4 +60,4 @@ const LIVE_STATUS = `CASE WHEN last_seen IS NOT NULL
   AND last_seen > NOW() - make_interval(secs => ${HEARTBEAT_TIMEOUT_SECONDS})
   THEN 'active' ELSE 'inactive' END`;
 
-module.exports = { validateIdParam, isId, handleDbError, keyMatches, LIVE_STATUS };
+module.exports = { trimBody, validateIdParam, isId, handleDbError, keyMatches, LIVE_STATUS };

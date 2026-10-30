@@ -18,7 +18,7 @@ export default function VenueList() {
     try {
       const data = await api.getVenues();
       setVenues(data);
-    } catch (err) {
+    } catch {
       toast.error('Failed to load venues');
     } finally {
       setLoading(false);

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -17,27 +17,34 @@ export default function StudentDetail() {
   const [studentNumber, setStudentNumber] = useState('');
   const [name, setName] = useState('');
   const [deviceId, setDeviceId] = useState('');
+  const [courseName, setCourseName] = useState('');
+  const [allModules, setAllModules] = useState([]);
+  const [moduleIds, setModuleIds] = useState(new Set());
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       const s = await api.getStudent(id);
       setStudent(s);
       setStudentNumber(s.student_number);
       setName(s.name);
       setDeviceId(String(s.device_id));
+      setCourseName(s.course_name ?? '');
+      setModuleIds(new Set((s.modules ?? []).map((m) => m.id)));
 
-      const dList = await api.getDevices();
+      const [dList, mList] = await Promise.all([api.getDevices(), api.getModules()]);
       setDevices(dList);
-    } catch (err) {
+      setAllModules(mList);
+    } catch {
       toast.error('Failed to load student details');
     }
-  };
+  }, [id]);
 
-  useEffect(() => { load(); }, [id]);
+  useEffect(() => { load(); }, [load]);
 
   const handleSave = async () => {
     try {
-      await api.updateStudent(id, studentNumber, name, Number(deviceId));
+      await api.updateStudent(id, studentNumber, name, Number(deviceId), courseName);
+      await api.setStudentModules(id, [...moduleIds]);
       toast.success('Student updated');
       load();
     } catch (err) {
@@ -77,8 +84,29 @@ export default function StudentDetail() {
             <Input value={name} onChange={(e) => setName(e.target.value)} />
           </div>
           <div className="space-y-2">
+            <label className="text-sm font-medium">Course name</label>
+            <Input value={courseName} onChange={(e) => setCourseName(e.target.value)} placeholder="e.g. National Diploma: Information Technology" />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Registered modules</label>
+            {allModules.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No modules exist yet. Add them under Modules.</p>
+            ) : (
+              <div className="grid gap-1 sm:grid-cols-2">
+                {allModules.map((m) => (
+                  <label key={m.id} className="flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm hover:bg-accent">
+                    <input type="checkbox" checked={moduleIds.has(m.id)}
+                      onChange={() => setModuleIds((prev) => { const n = new Set(prev); if (n.has(m.id)) n.delete(m.id); else n.add(m.id); return n; })} />
+                    <span className="font-mono text-xs">{m.code}</span> <span>{m.name}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground">If a module is already booked for an exam, ticking it reserves a seat automatically.</p>
+          </div>
+          <div className="space-y-2">
             <label className="text-sm font-medium">Assigned Device</label>
-            <Select value={deviceId} onValueChange={setDeviceId}>
+            <Select value={deviceId} onValueChange={setDeviceId} items={devices.map((d) => ({ value: String(d.id), label: d.name }))}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 {devices.map((d) => (

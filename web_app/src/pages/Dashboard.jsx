@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { api } from '@/lib/api';
+import OverrideDialog from '@/components/OverrideDialog';
 import {
   RefreshCcw, Wifi, WifiOff, AlertCircle, Download, Filter, UserPlus, Search,
   Users, CheckCircle2, XCircle, Activity, TrendingUp, MapPin, ArrowUpRight
@@ -52,14 +53,14 @@ function StatCard({ label, value, detail, Icon, tone, footer }) {
     violet: 'bg-violet-50 text-violet-700 ring-violet-100',
   };
   return (
-    <Card className="group rounded-2xl border-slate-200/80 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
+    <Card className="group rounded-lg border-slate-200/80 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md">
       <CardContent className="p-5">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-sm font-medium text-slate-500">{label}</p>
             <p className="mt-3 text-3xl font-bold tracking-tight text-slate-950 tabular-nums">{value}</p>
           </div>
-          <div className={`rounded-xl p-3 ring-1 ${tones[tone]}`}><Icon size={20} /></div>
+          <div className={`rounded-md p-3 ring-1 ${tones[tone]}`}><Icon size={20} /></div>
         </div>
         <p className="mt-2 text-xs text-slate-500">{detail}</p>
         {footer && <div className="mt-4 border-t border-slate-100 pt-3">{footer}</div>}
@@ -80,7 +81,7 @@ function DailyTrendChart({ data, loading }) {
   }
   if (!data.length || data.every((day) => Number(day.total) === 0)) {
     return <div className="flex h-56 flex-col items-center justify-center text-center">
-      <div className="rounded-2xl bg-slate-50 p-3 text-slate-400"><TrendingUp size={22} /></div>
+      <div className="rounded-lg bg-slate-50 p-3 text-slate-400"><TrendingUp size={22} /></div>
       <p className="mt-3 text-sm font-semibold text-slate-700">No activity to chart yet</p>
       <p className="mt-1 text-xs text-slate-500">Access events from the last seven days will appear here.</p>
     </div>;
@@ -142,7 +143,7 @@ function VenueBreakdown({ venues, loading }) {
 
 function TableSkeleton() {
   return <div className="space-y-3 p-2" aria-label="Loading events">
-    {[...Array(5)].map((_, i) => <div key={i} className="flex animate-pulse items-center gap-4 rounded-xl bg-slate-50 p-4">
+    {[...Array(5)].map((_, i) => <div key={i} className="flex animate-pulse items-center gap-4 rounded-md bg-slate-50 p-4">
       <div className="h-4 w-24 rounded bg-slate-200" /><div className="h-4 w-20 rounded bg-slate-200" /><div className="h-4 w-32 rounded bg-slate-200" /><div className="ml-auto h-6 w-20 rounded-full bg-slate-200" />
     </div>)}
   </div>;
@@ -155,12 +156,13 @@ function csvCell(value) {
 export default function Dashboard() {
   const navigate = useNavigate();
   const [events, setEvents] = useState([]);
+  const [overrideFor, setOverrideFor] = useState(null);
   const [analytics, setAnalytics] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState('reconnecting');
   const [lastUpdated, setLastUpdated] = useState(null);
-  const [clock, setClock] = useState(Date.now());
+  const [clock, setClock] = useState(() => Date.now());
   const [decisionFilter, setDecisionFilter] = useState('all');
   const [dateFilter, setDateFilter] = useState(localDate());
   const [searchTerm, setSearchTerm] = useState('');
@@ -170,7 +172,16 @@ export default function Dashboard() {
   const fetchDashboard = useCallback(async (manual = false) => {
     if (manual) setRefreshing(true);
     try {
-      const data = await api.getAccessEvents();
+      // Ask the server for the selected local day (the API only returns the latest 100 otherwise)
+      const params = { limit: 500 };
+      if (dateFilter) {
+        const start = new Date(`${dateFilter}T00:00:00`);
+        const end = new Date(start);
+        end.setDate(end.getDate() + 1);
+        params.from = start.toISOString();
+        params.to = end.toISOString();
+      }
+      const data = await api.getAccessEvents(params);
       setEvents(Array.isArray(data) ? data.map(normalizeEvent) : []);
       setConnectionStatus('live');
       setLastUpdated(Date.now());
@@ -193,7 +204,7 @@ export default function Dashboard() {
       console.error('Failed to load dashboard analytics:', error);
       setStatsWarning('Analytics could not be refreshed. Showing available event data where possible.');
     }
-  }, []);
+  }, [dateFilter]);
 
   useEffect(() => {
     fetchDashboard();
@@ -266,7 +277,7 @@ export default function Dashboard() {
 
   return (
     <div className="mx-auto max-w-[1600px] space-y-6">
-      <section className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-slate-950 via-blue-950 to-blue-800 px-5 py-6 text-white shadow-sm sm:px-7 sm:py-7">
+      <section className="relative overflow-hidden rounded-lg bg-gradient-to-br from-slate-950 via-blue-950 to-blue-800 px-5 py-6 text-white shadow-sm sm:px-7 sm:py-7">
         <div className="pointer-events-none absolute -right-10 -top-20 h-64 w-64 rounded-full border border-white/10" />
         <div className="pointer-events-none absolute -right-2 -top-12 h-48 w-48 rounded-full border border-white/10" />
         <div className="relative flex flex-col justify-between gap-5 sm:flex-row sm:items-center">
@@ -277,10 +288,10 @@ export default function Dashboard() {
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <StatusIndicator status={connectionStatus} />
-            <Button variant="secondary" onClick={() => fetchDashboard(true)} disabled={refreshing} className="gap-2 rounded-xl border border-white/10 bg-white text-slate-900 hover:bg-blue-50">
+            <Button variant="secondary" onClick={() => fetchDashboard(true)} disabled={refreshing} className="gap-2 rounded-md border border-white/10 bg-white text-slate-900 hover:bg-blue-50">
               <RefreshCcw size={15} className={refreshing ? 'animate-spin' : ''} /> Refresh data
             </Button>
-            <Button onClick={() => navigate('/enroll')} className="gap-2 rounded-xl bg-blue-500 text-white hover:bg-blue-400">
+            <Button onClick={() => navigate('/enroll')} className="gap-2 rounded-md bg-blue-500 text-white hover:bg-blue-400">
               <UserPlus size={16} /> Enrol student
             </Button>
           </div>
@@ -292,11 +303,11 @@ export default function Dashboard() {
         </div>
       </section>
 
-      {errorMessage && <div role="alert" className="flex flex-col gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800 sm:flex-row sm:items-center sm:justify-between">
+      {errorMessage && <div role="alert" className="flex flex-col gap-3 rounded-md border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800 sm:flex-row sm:items-center sm:justify-between">
         <span className="flex items-center gap-2"><AlertCircle size={17} />{errorMessage}</span>
         <Button variant="outline" size="sm" onClick={() => fetchDashboard(true)} className="border-rose-200 bg-white">Try again</Button>
       </div>}
-      {statsWarning && <p role="status" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">{statsWarning}</p>}
+      {statsWarning && <p role="status" className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">{statsWarning}</p>}
 
       <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4" aria-label="Today's registration and access metrics">
         <StatCard label="Access attempts" value={todayStats.total.toLocaleString()} detail="Today · all recorded decisions" Icon={Activity} tone="blue" />
@@ -307,14 +318,14 @@ export default function Dashboard() {
       </section>
 
       <section className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(300px,1fr)]">
-        <Card className="rounded-2xl border-slate-200/80 shadow-sm">
+        <Card className="rounded-lg border-slate-200/80 shadow-sm">
           <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0 pb-1">
             <div><CardTitle className="text-base font-bold text-slate-900">Access activity</CardTitle><p className="mt-1 text-xs text-slate-500">Daily access decisions over the last 7 days</p></div>
             <span className="rounded-lg bg-blue-50 p-2 text-blue-700"><TrendingUp size={18} /></span>
           </CardHeader>
           <CardContent><DailyTrendChart data={dailyTrend} loading={loading} /></CardContent>
         </Card>
-        <Card className="rounded-2xl border-slate-200/80 shadow-sm">
+        <Card className="rounded-lg border-slate-200/80 shadow-sm">
           <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0 pb-1">
             <div><CardTitle className="text-base font-bold text-slate-900">Venue activity</CardTitle><p className="mt-1 text-xs text-slate-500">Top venues by access attempts · 7 days</p></div>
             <span className="rounded-lg bg-violet-50 p-2 text-violet-700"><MapPin size={18} /></span>
@@ -323,7 +334,7 @@ export default function Dashboard() {
         </Card>
       </section>
 
-      <Card className="overflow-hidden rounded-2xl border-slate-200/80 shadow-sm">
+      <Card className="overflow-hidden rounded-lg border-slate-200/80 shadow-sm">
         <CardHeader className="gap-4 border-b border-slate-100 bg-white p-5 sm:p-6">
           <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
             <div>
@@ -335,23 +346,23 @@ export default function Dashboard() {
           <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(220px,1fr)_170px_180px]">
             <div className="relative">
               <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-              <Input aria-label="Search access events" placeholder="Search student, device, decision..." value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} className="h-10 rounded-xl border-slate-200 pl-9" />
+              <Input aria-label="Search access events" placeholder="Search student, device, decision..." value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} className="h-10 rounded-md border-slate-200 pl-9" />
             </div>
             <Select value={decisionFilter} onValueChange={setDecisionFilter}>
-              <SelectTrigger className="h-10 rounded-xl border-slate-200"><Filter size={15} className="mr-2 text-slate-400" /><SelectValue placeholder="All decisions" /></SelectTrigger>
+              <SelectTrigger className="h-10 rounded-md border-slate-200"><Filter size={15} className="mr-2 text-slate-400" /><SelectValue placeholder="All decisions" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All decisions</SelectItem>
                 <SelectItem value="granted">Granted</SelectItem>
                 <SelectItem value="denied">Denied</SelectItem>
               </SelectContent>
             </Select>
-            <Input aria-label="Filter events by date" type="date" value={dateFilter} onChange={(event) => setDateFilter(event.target.value)} className="h-10 rounded-xl border-slate-200" />
+            <Input aria-label="Filter events by date" type="date" value={dateFilter} onChange={(event) => setDateFilter(event.target.value)} className="h-10 rounded-md border-slate-200" />
           </div>
         </CardHeader>
         <CardContent className="p-0">
           {loading && events.length === 0 ? <div className="p-5"><TableSkeleton /></div> :
             filteredEvents.length === 0 ? <div className="flex flex-col items-center px-6 py-14 text-center">
-              <div className="mb-4 rounded-2xl bg-slate-100 p-4 text-slate-500"><AlertCircle size={28} /></div>
+              <div className="mb-4 rounded-lg bg-slate-100 p-4 text-slate-500"><AlertCircle size={28} /></div>
               <h3 className="font-semibold text-slate-900">{events.length === 0 ? 'No access events yet' : 'No matching events'}</h3>
               <p className="mt-2 max-w-sm text-sm text-slate-500">{events.length === 0 ? 'Events will appear here after a student is scanned at a registered device.' : 'Try changing the date, decision filter, or search term.'}</p>
               {events.length === 0
@@ -366,6 +377,7 @@ export default function Dashboard() {
                   <TableHead className="whitespace-nowrap px-5 py-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Student ID</TableHead>
                   <TableHead className="whitespace-nowrap px-5 py-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Decision</TableHead>
                   <TableHead className="whitespace-nowrap px-5 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Event ID</TableHead>
+                  <TableHead className="whitespace-nowrap px-5 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Action</TableHead>
                 </TableRow></TableHeader>
                 <TableBody>{filteredEvents.map((event) => {
                   const denied = String(event.decision || '').toLowerCase() === 'denied';
@@ -378,6 +390,13 @@ export default function Dashboard() {
                     <TableCell className="px-5 py-4 font-mono text-xs text-slate-600">{event.student_id || 'N/A'}</TableCell>
                     <TableCell className="px-5 py-4">{decisionBadge(event.decision)}</TableCell>
                     <TableCell className="px-5 py-4 text-right font-mono text-xs text-slate-400">{event.id ?? '—'}</TableCell>
+                    <TableCell className="px-5 py-4 text-right">
+                      {event.overridden
+                        ? <Badge variant="outline">Overridden</Badge>
+                        : event.id != null && String(event.decision || '').toLowerCase() !== 'granted'
+                          ? <Button variant="outline" size="sm" onClick={() => setOverrideFor(event)}>Override</Button>
+                          : null}
+                    </TableCell>
                   </TableRow>;
                 })}</TableBody>
               </Table>
@@ -388,6 +407,7 @@ export default function Dashboard() {
         <span>Smart Registration System · Analytics are based on recorded database events.</span>
         <button type="button" onClick={() => navigate('/venues')} className="inline-flex items-center gap-1 font-semibold text-blue-700 transition-colors hover:text-blue-900">Manage venues and devices <ArrowUpRight size={13} /></button>
       </div>
+      {overrideFor && <OverrideDialog event={overrideFor} onClose={() => setOverrideFor(null)} onDone={() => { setOverrideFor(null); fetchDashboard(true); }} />}
     </div>
   );
 }

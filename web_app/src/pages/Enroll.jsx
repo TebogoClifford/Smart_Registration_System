@@ -1,13 +1,13 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { api } from '@/lib/api';
-import { UserPlus, CheckCircle2, Info, AlertCircle, Loader2, ArrowRight, XCircle, RefreshCcw } from 'lucide-react';
+import { UserPlus, CheckCircle2, Info, AlertCircle, Loader2, XCircle, RefreshCcw } from 'lucide-react';
 
 function TableSkeleton() {
   return (
@@ -31,6 +31,7 @@ export default function Enroll() {
   // Form State
   const [studentNumber, setStudentNumber] = useState('');
   const [name, setName] = useState('');
+  const [courseName, setCourseName] = useState('');
   const [venueId, setVenueId] = useState('');
   const [deviceId, setDeviceId] = useState('');
   const [consent, setConsent] = useState(false);
@@ -42,7 +43,6 @@ export default function Enroll() {
   const [isLoadingRecent, setIsLoadingRecent] = useState(true);
 
   const [errors, setErrors] = useState({});
-  const navigate = useNavigate();
 
   const loadInitialData = useCallback(async () => {
     try {
@@ -107,7 +107,7 @@ export default function Enroll() {
 
     setLoading(true);
     try {
-      await api.createStudent(studentNumber.trim(), name.trim(), Number(deviceId));
+      await api.createStudent(studentNumber.trim(), name.trim(), Number(deviceId), courseName.trim());
       // Reload from the API after saving so the recent list reflects persisted data.
       await loadRecentEnrollments();
       toast.success('Student record saved. The device can now begin capture.');
@@ -124,6 +124,7 @@ export default function Enroll() {
     setStep(1);
     setStudentNumber('');
     setName('');
+    setCourseName('');
     setVenueId('');
     setDeviceId('');
     setConsent(false);
@@ -184,10 +185,21 @@ export default function Enroll() {
                     )}
                   </div>
 
+                  <div className="space-y-2">
+                    <label htmlFor="course-name" className="text-sm font-medium">Course name <span className="font-normal text-muted-foreground">(optional)</span></label>
+                    <Input
+                      id="course-name"
+                      value={courseName}
+                      onChange={(e) => setCourseName(e.target.value)}
+                      placeholder="e.g. National Diploma: Information Technology"
+                    />
+                    <p className="text-xs text-muted-foreground">Modules are assigned afterwards on the student's page or under Modules.</p>
+                  </div>
+
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <label className="text-sm font-medium">Venue</label>
-                      <Select value={venueId} onValueChange={(value) => { setVenueId(value); setDeviceId(''); setErrors((current) => ({ ...current, venueId: '', deviceId: '' })); }}>
+                      <Select value={venueId} items={venues.map((v) => ({ value: String(v.id), label: v.name }))} onValueChange={(value) => { setVenueId(value); setDeviceId(''); setErrors((current) => ({ ...current, venueId: '', deviceId: '' })); }}>
                         <SelectTrigger className={errors.venueId ? 'border-red-500' : ''}>
                           <SelectValue placeholder="Select Venue" />
                         </SelectTrigger>
@@ -203,7 +215,7 @@ export default function Enroll() {
                     </div>
                     <div className="space-y-2">
                       <label className="text-sm font-medium">Device</label>
-                      <Select value={deviceId} onValueChange={setDeviceId}>
+                      <Select value={deviceId} onValueChange={setDeviceId} items={filteredDevices.map((d) => ({ value: String(d.id), label: d.name }))}>
                         <SelectTrigger className={errors.deviceId ? 'border-red-500' : ''}>
                           <SelectValue placeholder="Select Device" />
                         </SelectTrigger>
