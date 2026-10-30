@@ -1,5 +1,5 @@
 import { Link, Outlet, useLocation } from 'react-router-dom';
-import { LayoutDashboard, MapPin, Users, UserPlus, LogOut, ShieldCheck, ChevronRight, Sparkles, BookOpen, CalendarCheck, KeyRound } from 'lucide-react';
+import { LayoutDashboard, MapPin, Users, UserPlus, LogOut, ShieldCheck, ChevronRight, Sparkles, BookOpen, CalendarCheck, KeyRound, UserCog } from 'lucide-react';
 import { useAuth } from '@/lib/auth';
 
 const VERSION = 'v1.2.0-beta';
@@ -13,6 +13,7 @@ const allNavItems = [
   { path: '/modules', label: 'Modules', icon: BookOpen },
   { path: '/bookings', label: 'Exam Bookings', icon: CalendarCheck },
   { path: '/users', label: 'Accounts', icon: KeyRound, adminOnly: true },
+  { path: '/account', label: 'My account', icon: UserCog },
 ];
 
 function BrandMark({ small = false }) {
@@ -80,11 +81,13 @@ export default function Layout() {
             <p className="mt-1 text-xs leading-relaxed text-slate-500">Manage access, venues and enrolments from one place.</p>
           </div>
           <div className="user-card">
-            <div className="user-avatar">{initialsOf(user?.name)}</div>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold text-slate-800">{user?.name}</p>
-              <p className="text-xs text-slate-500">{roleLabel}</p>
-            </div>
+            <Link to="/account" className="flex min-w-0 flex-1 items-center gap-3" aria-label="My account">
+              <div className="user-avatar">{initialsOf(user?.name)}</div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-semibold text-slate-800">{user?.name}</p>
+                <p className="text-xs text-slate-500">{roleLabel}</p>
+              </div>
+            </Link>
             {authRequired && (
               <button type="button" className="signout-button" aria-label="Sign out" onClick={logout}>
                 <LogOut size={16} />

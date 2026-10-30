@@ -42,6 +42,19 @@ async function verifyPassword(password, stored) {
   return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
 }
 
+// A temporary password an administrator hands over (shown once). 12 characters from a set with
+// no look-alikes (no 0/O, 1/l/I), always with a digit, so it is easy to read out or type.
+const TEMP_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+function temporaryPassword() {
+  for (;;) {
+    const pw = Array.from(crypto.randomBytes(12), (b) => TEMP_ALPHABET[b % TEMP_ALPHABET.length]).join('');
+    if (/\d/.test(pw) && /[A-Za-z]/.test(pw)) return pw;
+  }
+}
+
+// The account fields that are safe to send to the browser (never password_hash).
+const USER_COLS = 'id, email, name, role, staff_number, phone, active, must_change_password, last_login_at, created_at';
+
 // A real hash to compare against when the email does not exist, so "unknown email" and
 // "wrong password" take about the same time (stops attackers listing which emails exist).
 let dummyHash;
@@ -84,6 +97,11 @@ const PUBLIC_ROUTES = [
   ['POST', /^\/auth\/login$/],
   ['GET', /^\/auth\/status$/],
 ];
+// The only routes open to someone who must first replace a password an administrator gave them.
+const PASSWORD_CHANGE_ROUTES = [
+  ['GET', /^\/auth\/me$/],
+  ['PUT', /^\/auth\/password$/],
+];
 const matches = (list, req) => list.some(([m, re]) => m === req.method && re.test(req.path));
 
 // Mounted as app.use('/api', gate): every /api route needs a signed-in user unless listed above.
@@ -95,10 +113,14 @@ async function gate(req, res, next) {
   if (!token) return res.status(401).json({ error: 'sign-in required' });
   try {
     const claims = jwt.verify(token, SECRET, { algorithms: ['HS256'] });
-    // look the user up each time so deleting an account takes effect immediately
-    const { rows } = await pool.query('SELECT id, email, name, role FROM users WHERE id = $1', [claims.sub]);
+    // look the user up each time so deleting or disabling an account takes effect immediately
+    const { rows } = await pool.query(`SELECT ${USER_COLS} FROM users WHERE id = $1`, [claims.sub]);
     if (rows.length === 0) return res.status(401).json({ error: 'account no longer exists' });
+    if (!rows[0].active) return res.status(401).json({ error: 'this account has been disabled, contact an administrator' });
     req.user = rows[0];
+    if (req.user.must_change_password && !matches(PASSWORD_CHANGE_ROUTES, req)) {
+      return res.status(403).json({ error: 'choose a new password first', code: 'PASSWORD_CHANGE_REQUIRED' });
+    }
     next();
   } catch (err) {
     if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError' || err.name === 'NotBeforeError') {
@@ -136,5 +158,5 @@ async function seedAdmin() {
 
 module.exports = {
   authEnabled, isAdmin, requireAdmin, hashPassword, verifyPassword, getDummyHash, signToken,
-  throttleKey, isThrottled, recordFailure, clearFailures, gate, seedAdmin,
+  throttleKey, isThrottled, recordFailure, clearFailures, gate, seedAdmin, temporaryPassword, USER_COLS,
 };

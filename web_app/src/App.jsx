@@ -15,10 +15,12 @@ import Modules from './pages/Modules';
 import Bookings from './pages/Bookings';
 import Users from './pages/Users';
 import Login from './pages/Login';
+import Account from './pages/Account';
+import ForcePasswordChange from './pages/ForcePasswordChange';
 
 // Shows the sign-in page until the server says we are signed in (or sign-in is switched off).
 function Gate({ children }) {
-  const { ready, signedIn, startupError, retry } = useAuth();
+  const { ready, signedIn, mustChangePassword, startupError, retry } = useAuth();
   if (startupError) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-3 p-6 text-center">
@@ -29,8 +31,9 @@ function Gate({ children }) {
   }
   if (!ready) return <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">Connecting to the server…</div>;
 
-  // Force redirect to /login if not signed in
-  return signedIn ? children : <Login />;
+  // Force redirect to /login if not signed in, and to the password screen while the password is temporary
+  if (!signedIn) return <Login />;
+  return mustChangePassword ? <ForcePasswordChange /> : children;
 }
 
 export default function App() {
@@ -52,6 +55,7 @@ export default function App() {
                 <Route path="modules" element={<Modules />} />
                 <Route path="bookings" element={<Bookings />} />
                 <Route path="users" element={<Users />} />
+                <Route path="account" element={<Account />} />
               </Route>
             </Routes>
           </div>

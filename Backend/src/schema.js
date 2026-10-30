@@ -65,6 +65,15 @@ const STATEMENTS = [
   // --- roles: 'admin' manages venues/devices/accounts; 'invigilator' runs enrolment and exam bookings
   `ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'invigilator'`,
 
+  // --- account details: staff number and phone (optional), disable instead of delete,
+  // last sign-in, and "must choose a new password" after an administrator set or reset it
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS staff_number VARCHAR(30)`,
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(30)`,
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE`,
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE`,
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP WITH TIME ZONE`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS uq_users_staff_number ON users (LOWER(staff_number)) WHERE staff_number IS NOT NULL`,
+
   // --- venue capacity (0 = not set yet; a venue with no capacity cannot be booked)
   `ALTER TABLE venues ADD COLUMN IF NOT EXISTS capacity INTEGER NOT NULL DEFAULT 0 CHECK (capacity >= 0)`,
 

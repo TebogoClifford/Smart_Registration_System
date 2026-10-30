@@ -2,6 +2,7 @@ import axios from 'axios';
 
 export const TOKEN_KEY = 'srs.token';
 export const LOGOUT_EVENT = 'srs:logout';
+export const PASSWORD_CHANGE_EVENT = 'srs:password-change-required';
 
 // Set VITE_API_BASE_URL in .env.local to point the app at a local backend; defaults to the Render deployment.
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://smart-registration-system.onrender.com';
@@ -29,6 +30,8 @@ http.interceptors.response.use(
     else if (!err.response) err.message = 'Cannot reach the server. Check your connection and try again.';
     const isLogin = err.config?.url?.includes('/api/auth/login');
     if (err.response?.status === 401 && getToken() && !isLogin) window.dispatchEvent(new Event(LOGOUT_EVENT));
+    // an administrator reset the password while this page was open: show the change-password screen
+    if (err.response?.data?.code === 'PASSWORD_CHANGE_REQUIRED') window.dispatchEvent(new Event(PASSWORD_CHANGE_EVENT));
     return Promise.reject(err);
   }
 );
@@ -136,9 +139,12 @@ const api = {
   async login(email, password) { return (await http.post('/api/auth/login', { email, password })).data; },
   async me() { return (await http.get('/api/auth/me')).data; },
   async changePassword(currentPassword, newPassword) { return (await http.put('/api/auth/password', { currentPassword, newPassword })).data; },
+  async updateMe(changes) { return (await http.put('/api/auth/me', changes)).data; },
   async getUsers() { return (await http.get('/api/users')).data; },
   async createUser(user) { return (await http.post('/api/users', user)).data; },
   async updateUser(id, changes) { return (await http.put(`/api/users/${id}`, changes)).data; },
+  // returns the account with temporaryPassword (shown once)
+  async resetUserPassword(id) { return (await http.post(`/api/users/${id}/reset-password`)).data; },
   async deleteUser(id) { return (await http.delete(`/api/users/${id}`)).data; },
   // ---- modules and exam bookings
   async getModules() { return (await http.get('/api/modules')).data; },

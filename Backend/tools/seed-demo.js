@@ -58,7 +58,7 @@ async function main() {
   // 1. invigilator accounts (only meaningful when sign-in is on, harmless otherwise)
   const accounts = [['nomsa@demo.local', 'Nomsa Dlamini'], ['pieter@demo.local', 'Pieter van Wyk']];
   for (const [email, name] of accounts) {
-    const r = await call('POST', '/api/users', { email, name, password: 'Invigilator#2026', role: 'invigilator' });
+    const r = await call('POST', '/api/users', { email, name, password: 'Invigilator#2026', role: 'invigilator', mustChangePassword: false });
     if (r.status >= 400 && r.status !== 409) throw new Error(`user ${email}: ${r.status} ${r.json?.error}`);
   }
 
