@@ -114,6 +114,11 @@ const api = {
     const response = await http.delete(`/api/students/${id}`);
     return response.data;
   },
+  // Ask the device to capture this student again (sets the status back to 'pending').
+  async reEnrollStudent(id) {
+    const response = await http.post(`/api/students/${id}/re-enroll`);
+    return response.data;
+  },
   // params (optional): { from, to, limit } — ISO timestamps; see GET /api/access-events
   async getAccessEvents(params = {}) {
     const response = await http.get(`/api/access-events`, { params });

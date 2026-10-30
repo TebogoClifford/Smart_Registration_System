@@ -7,7 +7,11 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { api } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import { UserPlus, CheckCircle2, Info, AlertCircle, Loader2, XCircle, RefreshCcw } from 'lucide-react';
+
+const POLL_MS = 3000;                 // how often the page asks the backend whether the device has finished
+const ENROLL_WAIT_MS = 10 * 60 * 1000; // the backend drops requests nobody collected after 10 minutes
 
 function TableSkeleton() {
   return (
@@ -27,6 +31,10 @@ export default function Enroll() {
   const [step, setStep] = useState(1); // 1: Form, 2: Progress
   const [captureState, setCaptureState] = useState('capturing'); // capturing, enrolled, failed
   const [loading, setLoading] = useState(false);
+  const { user } = useAuth();
+  const [createdId, setCreatedId] = useState(null);   // id of the pending student record the device must capture
+  const [startedAt, setStartedAt] = useState(0);      // when the capture request was made (for the 10-minute limit)
+  const [failReason, setFailReason] = useState('');   // 'device' (device reported failure) or 'timeout'
 
   // Form State
   const [studentNumber, setStudentNumber] = useState('');
@@ -84,10 +92,41 @@ export default function Enroll() {
     return () => window.clearInterval(refreshTimer);
   }, [loadInitialData, loadRecentEnrollments]);
 
+  // While a capture is running, ask the backend every few seconds what the device (the PC program
+  // or the ESP32) has reported: it sets the student to 'enrolled' or 'failed' via PUT /students/:id/enrollment.
+  useEffect(() => {
+    if (step !== 2 || captureState !== 'capturing' || !createdId) return undefined;
+    let stopped = false;
+    const check = async () => {
+      try {
+        const [student, deviceData] = await Promise.all([api.getStudent(createdId), api.getDevices()]);
+        if (stopped) return;
+        if (Array.isArray(deviceData)) setDevices(deviceData);
+        if (student.enrollment_status === 'enrolled') {
+          setCaptureState('enrolled');
+          loadRecentEnrollments();
+        } else if (student.enrollment_status === 'failed') {
+          setFailReason('device');
+          setCaptureState('failed');
+          loadRecentEnrollments();
+        } else if (Date.now() - startedAt > ENROLL_WAIT_MS) {
+          setFailReason('timeout');
+          setCaptureState('failed');
+        }
+      } catch {
+        // A short connection problem must not end the capture; the next check tries again.
+      }
+    };
+    const timer = window.setInterval(check, POLL_MS);
+    return () => { stopped = true; window.clearInterval(timer); };
+  }, [step, captureState, createdId, startedAt, loadRecentEnrollments]);
+
   const filteredDevices = useMemo(
     () => devices.filter((device) => String(device.venue_id) === String(venueId)),
     [devices, venueId]
   );
+  const selectedDevice = devices.find((d) => String(d.id) === String(deviceId));
+  const deviceOnline = selectedDevice?.status === 'active';
 
   const validate = () => {
     const newErrors = {};
@@ -107,7 +146,10 @@ export default function Enroll() {
 
     setLoading(true);
     try {
-      await api.createStudent(studentNumber.trim(), name.trim(), Number(deviceId), courseName.trim());
+      const created = await api.createStudent(studentNumber.trim(), name.trim(), Number(deviceId), courseName.trim());
+      setCreatedId(created.id);
+      setStartedAt(Date.now());
+      setFailReason('');
       // Reload from the API after saving so the recent list reflects persisted data.
       await loadRecentEnrollments();
       toast.success('Student record saved. The device can now begin capture.');
@@ -120,7 +162,46 @@ export default function Enroll() {
     }
   };
 
+  // Ask the device to capture the same student again (after a failure or a timeout).
+  const handleTryAgain = async () => {
+    try {
+      await api.reEnrollStudent(createdId);
+      setFailReason('');
+      setStartedAt(Date.now());
+      setCaptureState('capturing');
+    } catch (err) {
+      toast.error(err.message);
+    }
+  };
+
+  // Go back to the form. The unfinished record is removed first; otherwise saving the same
+  // student number again would be refused as a duplicate, and the device would still try to capture it.
+  const handleBackToForm = async () => {
+    try {
+      if (createdId) await api.deleteStudent(createdId);
+    } catch (err) {
+      toast.error(err.message);
+      return;
+    }
+    setCreatedId(null);
+    setStep(1);
+    setCaptureState('capturing');
+    loadRecentEnrollments();
+  };
+
+  // "Re-enroll" in the recent list: the device picks the student up on its next poll.
+  const handleReenrollRow = async (student) => {
+    try {
+      await api.reEnrollStudent(student.id);
+      toast.success(`${student.name} is waiting for the device to capture again.`);
+      loadRecentEnrollments();
+    } catch (err) {
+      toast.error(err.message);
+    }
+  };
+
   const handleReset = () => {
+    setCreatedId(null);
     setStep(1);
     setStudentNumber('');
     setName('');
@@ -228,6 +309,11 @@ export default function Enroll() {
                           <AlertCircle size={12} /> {errors.deviceId}
                         </p>
                       )}
+                      {deviceId && !deviceOnline && (
+                        <p className="text-xs text-amber-600 flex items-center gap-1">
+                          <AlertCircle size={12} /> This device is offline. Start the device program first, or the capture will wait.
+                        </p>
+                      )}
                     </div>
                   </div>
 
@@ -246,7 +332,7 @@ export default function Enroll() {
                     </div>
                     <div className="flex items-center gap-2 text-xs text-muted-foreground ml-7">
                       <span className="font-medium">Confirmed by:</span>
-                      <span className="text-foreground">Teboho M. (Invigilator)</span>
+                      <span className="text-foreground">{user?.name || user?.email || 'Signed-in user'}</span>
                     </div>
                     {errors.consent && (
                       <p className="text-xs text-red-500 flex items-center gap-1 ml-7">
@@ -291,8 +377,8 @@ export default function Enroll() {
                       <div className="absolute top-1/2 left-0 w-full h-0.5 bg-muted -translate-y-1/2 z-0" />
                       {[
                         { label: 'Details saved', status: 'done' },
-                        { label: 'Device ready', status: 'done' },
-                        { label: 'Capturing', status: 'active' },
+                        { label: 'Device ready', status: deviceOnline ? 'done' : 'active' },
+                        { label: 'Capturing', status: deviceOnline ? 'active' : 'future' },
                         { label: 'Enrolled', status: 'future' },
                       ].map((step, i) => (
                         <div key={i} className="relative z-10 flex flex-col items-center gap-2">
@@ -310,10 +396,14 @@ export default function Enroll() {
                     </div>
                     <div className="p-4 bg-blue-50 border border-blue-100 rounded-lg flex items-center gap-3 text-blue-700">
                       <Info size={20} className="shrink-0" />
-                      <p className="text-sm font-medium">Ask the student to face the camera and stay still.</p>
+                      <p className="text-sm font-medium">
+                        {deviceOnline
+                          ? 'Ask the student to face the camera and stay still.'
+                          : 'Waiting for the device to come online. Start the device program; it will pick this student up by itself.'}
+                      </p>
                     </div>
                     <div className="flex justify-center">
-                      <Button variant="outline" onClick={() => setStep(1)}>Cancel capture</Button>
+                      <Button variant="outline" onClick={handleBackToForm}>Cancel capture</Button>
                     </div>
                   </>
                 )}
@@ -340,13 +430,17 @@ export default function Enroll() {
                     </div>
                     <div className="space-y-2">
                       <h3 className="text-xl font-bold">Capture Failed</h3>
-                      <p className="text-muted-foreground text-sm">The device could not capture a clear image. Please try again.</p>
+                      <p className="text-muted-foreground text-sm">
+                        {failReason === 'timeout'
+                          ? 'No device picked up the request within 10 minutes. Check that the device shows Online, then try again.'
+                          : 'The device could not capture a clear image. Please try again.'}
+                      </p>
                     </div>
                     <div className="flex items-center justify-center gap-3">
-                      <Button variant="outline" onClick={() => setCaptureState('capturing')} className="gap-2">
+                      <Button variant="outline" onClick={handleTryAgain} className="gap-2">
                         <RefreshCcw size={16} /> Try again
                       </Button>
-                      <Button variant="ghost" onClick={() => { setStep(1); handleReset(); }} className="gap-2">
+                      <Button variant="ghost" onClick={handleBackToForm} className="gap-2">
                         Edit details
                       </Button>
                     </div>
@@ -425,7 +519,7 @@ export default function Enroll() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
-                        <Button variant="ghost" size="sm" className="h-7 text-xs">Re-enroll</Button>
+                        <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => handleReenrollRow(s)}>Re-enroll</Button>
                       </div>
                     </TableCell>
                   </TableRow>
