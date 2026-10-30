@@ -12,7 +12,7 @@ The frontend uses a centralized API client located at `src/lib/api.js`.
 
 | Frontend Page | Action | API Method | Backend Endpoint | Purpose |
 | :--- | :--- | :--- | :--- | :--- |
-| **Dashboard** | Load Feed | `getAccessEvents` | `GET /api/access-events` | Polls every 5s for live logs |
+| **Dashboard** | Load Feed | `getAccessEvents` | `GET /api/access-events` | Polls every 15s for live logs |
 | **Venues** | List Venues | `getVenues` | `GET /api/venues` | Fetch all venues |
 | | Add Venue | `createVenue` | `POST /api/venues` | Create new venue |
 | **Venue Detail** | Edit Name | `updateVenue` | `PUT /api/venues/:id` | Update venue name |
@@ -25,6 +25,9 @@ The frontend uses a centralized API client located at `src/lib/api.js`.
 | **Student Detail** | Edit Info | `updateStudent` | `PUT /api/students/:id` | Update student details |
 | | Delete | `deleteStudent` | `DELETE /api/students/:id` | Remove student record |
 | **Enroll** | Initialize | `createStudent` | `POST /api/students` | Create 'pending' student record |
+| | Wait for device | `getStudent` | `GET /api/students/:id` | Polls every 3s until the device reports `enrolled` or `failed` (gives up after 10 min) |
+| | Try again / Re-enroll | `reEnrollStudent` | `POST /api/students/:id/re-enroll` | Sets the student back to `pending` so the device captures again |
+| | Cancel / Edit details | `deleteStudent` | `DELETE /api/students/:id` | Removes the unfinished record |
 
 ## 3. Key Logic Flows
 
