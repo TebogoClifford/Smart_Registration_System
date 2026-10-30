@@ -4,6 +4,36 @@
 const pool = require('./db');
 
 const STATEMENTS = [
+  // --- base tables (same as schema.sql), so a brand-new empty database starts without any manual step.
+  // On an existing database these do nothing.
+  `CREATE TABLE IF NOT EXISTS venues (
+     id SERIAL PRIMARY KEY,
+     name VARCHAR(100) NOT NULL,
+     created_at TIMESTAMP DEFAULT NOW()
+   )`,
+  `CREATE TABLE IF NOT EXISTS devices (
+     id SERIAL PRIMARY KEY,
+     venue_id INTEGER NOT NULL REFERENCES venues(id),
+     name VARCHAR(100) NOT NULL,
+     api_key VARCHAR(64) NOT NULL,
+     status VARCHAR(20) NOT NULL DEFAULT 'inactive'
+   )`,
+  `CREATE TABLE IF NOT EXISTS students (
+     id SERIAL PRIMARY KEY,
+     student_number VARCHAR(20) NOT NULL,
+     name VARCHAR(100) NOT NULL,
+     device_id INTEGER NOT NULL REFERENCES devices(id),
+     enrollment_status VARCHAR(20) NOT NULL DEFAULT 'pending',
+     enrollment_image BYTEA
+   )`,
+  `CREATE TABLE IF NOT EXISTS access_events (
+     id SERIAL PRIMARY KEY,
+     device_id INTEGER NOT NULL REFERENCES devices(id),
+     student_id INTEGER REFERENCES students(id),
+     decision VARCHAR(10) NOT NULL,
+     event_time TIMESTAMP DEFAULT NOW()
+   )`,
+
   // --- earlier migrations (previously migrate_heartbeat.js / migrate_overrides.js)
   `ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP WITH TIME ZONE`,
   `CREATE TABLE IF NOT EXISTS event_overrides (
