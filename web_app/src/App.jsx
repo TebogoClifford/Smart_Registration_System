@@ -28,6 +28,8 @@ function Gate({ children }) {
     );
   }
   if (!ready) return <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">Connecting to the server…</div>;
+
+  // Force redirect to /login if not signed in
   return signedIn ? children : <Login />;
 }
 
