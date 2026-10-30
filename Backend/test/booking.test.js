@@ -1,4 +1,4 @@
-// Capacity, modules and exam booking tests — run with: BASE_URL=http://localhost:3111 node --test test/booking.test.js
+// Capacity, modules and exam booking tests — against an AUTH_DISABLED=true server, run with: BASE_URL=http://localhost:3111 node --test test/booking.test.js
 const { test } = require('node:test');
 const assert = require('node:assert');
 

@@ -1,0 +1,5 @@
+config.ini
+models/*.onnx
+models/*.part
+data/
+__pycache__/

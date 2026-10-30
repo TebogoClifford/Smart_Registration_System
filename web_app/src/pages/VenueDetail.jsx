@@ -7,11 +7,13 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import ConfirmDeleteDialog from '@/components/ConfirmDeleteDialog';
 import { api } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import { ArrowLeft } from 'lucide-react';
 
 export default function VenueDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { isAdmin } = useAuth(); // invigilators may look, only administrators may change
   const [venue, setVenue] = useState(null);
   const [name, setName] = useState('');
   const [capacity, setCapacity] = useState('');
@@ -78,16 +80,19 @@ export default function VenueDetail() {
               onChange={(e) => setName(e.target.value)}
               placeholder="Venue Name"
               aria-label="Venue name"
+              disabled={!isAdmin}
             />
             <Input
-              type="number" min="1" step="1" className="max-w-32"
+              type="number" min="1" step="1" className="max-w-32" disabled={!isAdmin}
               value={capacity}
               onChange={(e) => setCapacity(e.target.value)}
               placeholder="Seats"
               aria-label="Capacity (seats)"
             />
-            <Button onClick={handleSave}>Save Changes</Button>
-            <ConfirmDeleteDialog itemName="this venue" onConfirm={handleDelete} />
+            {isAdmin && <>
+              <Button onClick={handleSave}>Save Changes</Button>
+              <ConfirmDeleteDialog itemName="this venue" onConfirm={handleDelete} />
+            </>}
           </div>
         </CardContent>
       </Card>

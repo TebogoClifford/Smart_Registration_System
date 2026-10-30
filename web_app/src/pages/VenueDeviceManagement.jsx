@@ -7,10 +7,12 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { api } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import { Plus, MapPin, Cpu, Search, RefreshCw, Wifi, WifiOff, CircleHelp, Activity, Clock3 } from 'lucide-react';
 
 export default function VenueDeviceManagement() {
   const navigate = useNavigate();
+  const { isAdmin } = useAuth(); // only administrators add venues and devices (the server enforces it too)
   const [venues, setVenues] = useState([]);
   const [devices, setDevices] = useState([]);
   const [venueName, setVenueName] = useState('');
@@ -163,7 +165,7 @@ export default function VenueDeviceManagement() {
       <div className="space-y-6">
 <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-[minmax(0,1.6fr)_minmax(320px,0.9fr)]">
           <div className="min-w-0 space-y-5">
-            <Card className="rounded-lg shadow-sm">
+            {isAdmin && <Card className="rounded-lg shadow-sm">
               <CardHeader><CardTitle className="text-base">Add a venue</CardTitle></CardHeader>
               <CardContent>
                 <form onSubmit={handleAddVenue} className="flex flex-col gap-3 sm:flex-row">
@@ -172,7 +174,7 @@ export default function VenueDeviceManagement() {
                   <Button type="submit" disabled={saving || !venueName.trim()} className="h-11 shrink-0 rounded-md"><Plus size={16} className="mr-2" /> Add venue</Button>
                 </form>
               </CardContent>
-            </Card>
+            </Card>}
             <Card className="overflow-hidden rounded-lg shadow-sm">
               <CardHeader><CardTitle className="text-base">Venue directory</CardTitle></CardHeader>
               <CardContent className="p-0">
@@ -192,7 +194,7 @@ export default function VenueDeviceManagement() {
               </CardContent>
             </Card>
           <div id="device-management" className="space-y-5">
-          <Card className="rounded-lg shadow-sm">
+          {isAdmin && <Card className="rounded-lg shadow-sm">
             <CardHeader><CardTitle className="text-base">Register a device</CardTitle></CardHeader>
             <CardContent>
               <form onSubmit={handleAddDevice} className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(200px,1fr)_minmax(180px,0.8fr)_auto]">
@@ -205,7 +207,7 @@ export default function VenueDeviceManagement() {
               </form>
               {venues.length === 0 && <p className="mt-3 text-sm text-amber-700">Create a venue before registering a device.</p>}
             </CardContent>
-          </Card>
+          </Card>}
           <Card className="overflow-hidden rounded-lg shadow-sm">
             <CardHeader><CardTitle className="text-base">Device directory</CardTitle></CardHeader>
             <CardContent className="p-0">
@@ -267,7 +269,7 @@ export default function VenueDeviceManagement() {
                   <Cpu size={24} className="mx-auto mb-2 text-muted-foreground" />
                   <p className="text-sm font-medium">No devices registered</p>
                   <p className="mt-1 text-xs text-muted-foreground">Add a device to see its reported status here.</p>
-                  <Button variant="outline" size="sm" onClick={() => document.getElementById('device-management')?.scrollIntoView({ behavior: 'smooth' })} className="mt-4">Register a device</Button>
+                  {isAdmin && <Button variant="outline" size="sm" onClick={() => document.getElementById('device-management')?.scrollIntoView({ behavior: 'smooth' })} className="mt-4">Register a device</Button>}
                 </div>
               ) : (
                 <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">

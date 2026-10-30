@@ -1,4 +1,4 @@
-// API tests — run with: BASE_URL=http://localhost:3111 node --test test/api.test.js
+// API tests — start an open test server (AUTH_DISABLED=true PORT=3111 npm start), then run with: BASE_URL=http://localhost:3111 node --test test/api.test.js
 const { test } = require('node:test');
 const assert = require('node:assert');
 
