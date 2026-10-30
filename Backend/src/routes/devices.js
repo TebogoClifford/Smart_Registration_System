@@ -1,8 +1,8 @@
 const express = require('express');
 const router = express.Router();
-const pool = require('../db');
+const prisma = require('../db');
 const crypto = require('crypto');
-const { validateIdParam, isId, handleDbError, LIVE_STATUS } = require('../http');
+const { validateIdParam, isId, handleDbError, isNotFound, liveStatus, toDbDate } = require('../http');
 const { requireDevice } = require('../deviceAuth');
 const auth = require('../auth');
 const { SLOTS, isValidDate } = require('../bookings');
@@ -10,8 +10,6 @@ const { SLOTS, isValidDate } = require('../bookings');
 const BATCH_MAX = 100; // keep in step with routes/accessEvents.js
 
 router.param('id', validateIdParam);
-
-
 
 // POST /api/devices — register a device against a venue
 router.post('/', auth.requireAdmin, async (req, res) => {
@@ -22,12 +20,8 @@ router.post('/', auth.requireAdmin, async (req, res) => {
   if (!isId(venue_id)) return res.status(400).json({ error: 'venue_id must be a positive integer' });
   const api_key = crypto.randomBytes(32).toString('hex');
   try {
-    const result = await pool.query(
-      `INSERT INTO devices (venue_id, name, api_key, status)
-       VALUES ($1, $2, $3, 'inactive') RETURNING *`,
-      [venue_id, name, api_key]
-    );
-    res.status(201).json(result.rows[0]);
+    const device = await prisma.devices.create({ data: { venue_id: Number(venue_id), name: String(name), api_key, status: 'inactive' } });
+    res.status(201).json(device);
   } catch (err) {
     handleDbError(res, err);
   }
@@ -37,10 +31,8 @@ router.post('/', auth.requireAdmin, async (req, res) => {
 router.get('/', async (req, res) => {
   try {
     // api_key is a secret — only the single-device view (admin copy-to-firmware) returns it
-    const result = await pool.query(
-      `SELECT id, venue_id, name, ${LIVE_STATUS} AS status, last_seen FROM devices ORDER BY id`
-    );
-    res.json(result.rows);
+    const devices = await prisma.devices.findMany({ select: { id: true, venue_id: true, name: true, last_seen: true }, orderBy: { id: 'asc' } });
+    res.json(devices.map((d) => ({ ...d, status: liveStatus(d.last_seen) })));
   } catch (err) {
     handleDbError(res, err);
   }
@@ -49,12 +41,11 @@ router.get('/', async (req, res) => {
 // GET /api/devices/:id — single device (needed for detail page)
 router.get('/:id', async (req, res) => {
   try {
-    const result = await pool.query(
-      `SELECT id, venue_id, name, api_key, ${LIVE_STATUS} AS status, last_seen FROM devices WHERE id = $1`,
-      [req.params.id]
-    );
-    if (result.rows.length === 0) return res.status(404).json({ error: 'device not found' });
-    const device = result.rows[0];
+    const row = await prisma.devices.findUnique({
+      where: { id: Number(req.params.id) }, select: { id: true, venue_id: true, name: true, api_key: true, last_seen: true },
+    });
+    if (!row) return res.status(404).json({ error: 'device not found' });
+    const device = { ...row, status: liveStatus(row.last_seen) };
     if (!auth.isAdmin(req)) delete device.api_key; // the device key is a secret: administrators only
     res.json(device);
   } catch (err) {
@@ -69,13 +60,9 @@ router.put('/:id', auth.requireAdmin, async (req, res) => {
   if (!name || !venue_id) return res.status(400).json({ error: 'name and venue_id are required' });
   if (!isId(venue_id)) return res.status(400).json({ error: 'venue_id must be a positive integer' });
   try {
-    const result = await pool.query(
-      'UPDATE devices SET name = $1, venue_id = $2 WHERE id = $3 RETURNING *',
-      [name, venue_id, id]
-    );
-    if (result.rows.length === 0) return res.status(404).json({ error: 'device not found' });
-    res.json(result.rows[0]);
+    res.json(await prisma.devices.update({ where: { id: Number(id) }, data: { name: String(name), venue_id: Number(venue_id) } }));
   } catch (err) {
+    if (isNotFound(err)) return res.status(404).json({ error: 'device not found' });
     handleDbError(res, err);
   }
 });
@@ -84,21 +71,20 @@ router.put('/:id', auth.requireAdmin, async (req, res) => {
 router.delete('/:id', auth.requireAdmin, async (req, res) => {
   const { id } = req.params;
   try {
-    const studentCheck = await pool.query('SELECT id FROM students WHERE device_id = $1', [id]);
-    if (studentCheck.rows.length > 0) {
+    const students = await prisma.students.count({ where: { device_id: Number(id) } });
+    if (students > 0) {
       return res.status(409).json({
-        error: `Cannot delete device: ${studentCheck.rows.length} student(s) still enrolled. Remove them first.`,
+        error: `Cannot delete device: ${students} student(s) still enrolled. Remove them first.`,
       });
     }
     // Access events are the audit trail, so a device that has reported events cannot be deleted.
-    const eventCheck = await pool.query('SELECT 1 FROM access_events WHERE device_id = $1 LIMIT 1', [id]);
-    if (eventCheck.rows.length > 0) {
+    if (await prisma.access_events.findFirst({ where: { device_id: Number(id) }, select: { id: true } })) {
       return res.status(409).json({
         error: 'Cannot delete device: it has recorded access events (audit history). Set it inactive instead.',
       });
     }
-    const result = await pool.query('DELETE FROM devices WHERE id = $1 RETURNING id', [id]);
-    if (result.rows.length === 0) return res.status(404).json({ error: 'device not found' });
+    const { count } = await prisma.devices.deleteMany({ where: { id: Number(id) } });
+    if (count === 0) return res.status(404).json({ error: 'device not found' });
     res.status(204).send();
   } catch (err) {
     handleDbError(res, err);
@@ -112,6 +98,9 @@ router.post('/heartbeat', requireDevice, (req, res) => {
 });
 
 // ---------- device-facing endpoints (authenticated with X-Device-Key, see deviceAuth.js) ----------
+// A student as the device API names it.
+const toDeviceStudent = (s) => ({ studentId: s.id, studentNumber: s.student_number, name: s.name });
+
 const envInt = (name, fallback) => {
   const n = parseInt(process.env[name], 10);
   return Number.isFinite(n) && n > 0 ? n : fallback;
@@ -137,15 +126,13 @@ router.get('/:id/config', requireDevice, (req, res) => {
 // Requests older than ENROLL_REQUEST_TTL_SECONDS (default 10 min) are ignored as abandoned.
 router.get('/:id/pending-enrollments', requireDevice, async (req, res) => {
   try {
-    const { rows } = await pool.query(
-      `SELECT id AS "studentId", student_number AS "studentNumber", name
-       FROM students
-       WHERE device_id = $1 AND enrollment_status = 'pending'
-         AND enrollment_requested_at > NOW() - make_interval(secs => $2)
-       ORDER BY enrollment_requested_at, id`,
-      [req.device.id, envInt('ENROLL_REQUEST_TTL_SECONDS', 600)]
-    );
-    res.json(rows);
+    const since = new Date(Date.now() - envInt('ENROLL_REQUEST_TTL_SECONDS', 600) * 1000);
+    const rows = await prisma.students.findMany({
+      where: { device_id: req.device.id, enrollment_status: 'pending', enrollment_requested_at: { gt: since } },
+      select: { id: true, student_number: true, name: true },
+      orderBy: [{ enrollment_requested_at: 'asc' }, { id: 'asc' }],
+    });
+    res.json(rows.map(toDeviceStudent));
   } catch (err) {
     handleDbError(res, err);
   }
@@ -156,12 +143,12 @@ router.get('/:id/pending-enrollments', requireDevice, async (req, res) => {
 // (for example after a student record was removed in the web app).
 router.get('/:id/roster', requireDevice, async (req, res) => {
   try {
-    const { rows } = await pool.query(
-      `SELECT id AS "studentId", student_number AS "studentNumber", name
-       FROM students WHERE device_id = $1 AND enrollment_status = 'enrolled' ORDER BY id`,
-      [req.device.id]
-    );
-    res.json(rows);
+    const rows = await prisma.students.findMany({
+      where: { device_id: req.device.id, enrollment_status: 'enrolled' },
+      select: { id: true, student_number: true, name: true },
+      orderBy: { id: 'asc' },
+    });
+    res.json(rows.map(toDeviceStudent));
   } catch (err) {
     handleDbError(res, err);
   }
@@ -186,18 +173,20 @@ router.get('/:id/session', requireDevice, async (req, res) => {
   if (!isValidDate(date)) return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
   if (!SLOTS.includes(slot)) return res.status(400).json({ error: `slot must be one of ${SLOTS.join(', ')}` });
   try {
-    const { rows } = await pool.query(
-      `SELECT s.id AS "studentId", s.student_number AS "studentNumber", s.name, r.seat_number AS "seatNumber",
-              m.code AS "moduleCode", (s.device_id = $1 AND s.enrollment_status = 'enrolled') AS "onThisDevice"
-       FROM seat_reservations r
-       JOIN students s ON s.id = r.student_id
-       JOIN exam_bookings b ON b.id = r.booking_id
-       JOIN modules m ON m.id = b.module_id
-       WHERE r.venue_id = $2 AND r.exam_date = $3 AND r.slot = $4
-       ORDER BY r.seat_number`,
-      [req.device.id, req.device.venue_id, date, slot]
-    );
-    res.json({ venueId: req.device.venue_id, date, slot, serverTime: new Date().toISOString(), students: rows });
+    const seats = await prisma.seat_reservations.findMany({
+      where: { venue_id: req.device.venue_id, exam_date: toDbDate(date), slot },
+      select: {
+        seat_number: true,
+        students: { select: { id: true, student_number: true, name: true, device_id: true, enrollment_status: true } },
+        exam_bookings: { select: { modules: { select: { code: true } } } },
+      },
+      orderBy: { seat_number: 'asc' },
+    });
+    const students = seats.map(({ seat_number, students: s, exam_bookings: b }) => ({
+      ...toDeviceStudent(s), seatNumber: seat_number, moduleCode: b.modules.code,
+      onThisDevice: s.device_id === req.device.id && s.enrollment_status === 'enrolled',
+    }));
+    res.json({ venueId: req.device.venue_id, date, slot, serverTime: new Date().toISOString(), students });
   } catch (err) {
     handleDbError(res, err);
   }

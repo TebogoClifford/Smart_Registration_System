@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const pool = require('../db');
-const { validateIdParam, isId, handleDbError } = require('../http');
+const prisma = require('../db');
+const { validateIdParam, isId, handleDbError, pgCode } = require('../http');
 const { requireDevice } = require('../deviceAuth');
 
 router.param('id', validateIdParam);
@@ -44,26 +44,26 @@ function checkEvent(e) {
   return { value: { decision: e.decision, studentId, clientEventId, timestamp, secondsAgo } };
 }
 
+// The event fields the API returns.
+const EVENT_SELECT = { id: true, device_id: true, student_id: true, decision: true, event_time: true, client_event_id: true };
+const toApi = (e) => ({ id: e.id, deviceId: e.device_id, studentId: e.student_id, decision: e.decision, timestamp: e.event_time, clientEventId: e.client_event_id });
+
 // Insert one event for a device. Returns { id, ..., duplicate } — a repeated clientEventId
 // from the same device returns the original event instead of creating a second row.
 async function insertEvent(deviceId, v) {
-  const sql = `
-    INSERT INTO access_events (device_id, student_id, decision, event_time, client_event_id)
-    VALUES ($1, $2, $3,
-            COALESCE($4::timestamptz, NOW() - make_interval(secs => COALESCE($5::float8, 0))),
-            $6)
-    ON CONFLICT (device_id, client_event_id) WHERE client_event_id IS NOT NULL DO NOTHING
-    RETURNING id, device_id AS "deviceId", student_id AS "studentId", decision, event_time AS "timestamp",
-              client_event_id AS "clientEventId"`;
-  const inserted = await pool.query(sql, [deviceId, v.studentId, v.decision, v.timestamp, v.secondsAgo, v.clientEventId]);
-  if (inserted.rows.length > 0) return { ...inserted.rows[0], duplicate: false };
-  const existing = await pool.query(
-    `SELECT id, device_id AS "deviceId", student_id AS "studentId", decision, event_time AS "timestamp",
-            client_event_id AS "clientEventId"
-     FROM access_events WHERE device_id = $1 AND client_event_id = $2`,
-    [deviceId, v.clientEventId]
-  );
-  return { ...existing.rows[0], duplicate: true };
+  const when = v.timestamp ? new Date(v.timestamp) : new Date(Date.now() - (v.secondsAgo ?? 0) * 1000);
+  try {
+    const e = await prisma.access_events.create({
+      data: { device_id: deviceId, student_id: v.studentId, decision: v.decision, event_time: when, client_event_id: v.clientEventId },
+      select: EVENT_SELECT,
+    });
+    return { ...toApi(e), duplicate: false };
+  } catch (err) {
+    // the unique index on (device_id, client_event_id) says this upload was already stored
+    if (pgCode(err) !== '23505' || !v.clientEventId) throw err;
+    const e = await prisma.access_events.findFirst({ where: { device_id: deviceId, client_event_id: v.clientEventId }, select: EVENT_SELECT });
+    return { ...toApi(e), duplicate: true };
+  }
 }
 
 // POST /api/access-events — device reports one access decision.
@@ -109,7 +109,7 @@ router.post('/batch', requireDevice, async (req, res) => {
       results.push({ index, clientEventId, status: saved.duplicate ? 'duplicate' : 'created', id: saved.id });
     } catch (err) {
       // 23503 = student does not exist (anything else is a real server problem)
-      if (err.code === '23503') {
+      if (pgCode(err) === '23503') {
         results.push({ index, clientEventId, status: 'rejected', error: 'studentId does not exist' });
       } else {
         console.error(err);
@@ -131,18 +131,16 @@ router.get('/', async (req, res) => {
     }
   }
   try {
-    const result = await pool.query(
-      `SELECT e.id, e.device_id AS "deviceId", e.student_id AS "studentId", e.decision,
-              e.event_time AS "timestamp",
-              EXISTS (SELECT 1 FROM event_overrides o WHERE o.event_id = e.id) AS overridden
-       FROM access_events e
-       WHERE ($1::timestamptz IS NULL OR e.event_time >= $1)
-         AND ($2::timestamptz IS NULL OR e.event_time <  $2)
-       ORDER BY e.event_time DESC, e.id DESC
-       LIMIT $3`,
-      [from || null, to || null, limit]
-    );
-    res.json(result.rows);
+    const events = await prisma.access_events.findMany({
+      where: { event_time: { ...(from && { gte: new Date(from) }), ...(to && { lt: new Date(to) }) } },
+      select: { id: true, device_id: true, student_id: true, decision: true, event_time: true, _count: { select: { event_overrides: true } } },
+      orderBy: [{ event_time: 'desc' }, { id: 'desc' }],
+      take: limit,
+    });
+    res.json(events.map((e) => ({
+      id: e.id, deviceId: e.device_id, studentId: e.student_id, decision: e.decision, timestamp: e.event_time,
+      overridden: e._count.event_overrides > 0,
+    })));
   } catch (err) {
     handleDbError(res, err);
   }
@@ -160,14 +158,10 @@ router.post('/:id/override', async (req, res) => {
   }
 
   try {
-    const eventCheck = await pool.query('SELECT id FROM access_events WHERE id = $1', [id]);
-    if (eventCheck.rows.length === 0) {
+    if (!(await prisma.access_events.findUnique({ where: { id: Number(id) }, select: { id: true } }))) {
       return res.status(404).json({ error: 'event not found' });
     }
-    await pool.query(
-      `INSERT INTO event_overrides (event_id, invigilator_id, reason) VALUES ($1, $2, $3)`,
-      [id, invigilatorId, reason]
-    );
+    await prisma.event_overrides.create({ data: { event_id: Number(id), invigilator_id: String(invigilatorId), reason: String(reason) } });
     res.json({ status: 'success', message: 'Entry override recorded' });
   } catch (err) {
     handleDbError(res, err);

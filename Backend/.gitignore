@@ -5,3 +5,6 @@ node_modules/
 
 # local notes with dev passwords
 *.local.md
+
+# Prisma client (made by npm run generate)
+src/generated/

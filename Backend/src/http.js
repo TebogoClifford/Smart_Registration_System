@@ -1,8 +1,8 @@
-// http.js — small shared helpers for request validation and DB error mapping
+// http.js — small shared helpers for request validation and database error mapping
 const crypto = require('crypto');
 
-// router.param handler: reject non-numeric :id before it reaches Postgres
-// (otherwise Postgres throws "invalid input syntax for type integer" -> 500).
+// router.param handler: reject non-numeric :id before it reaches the database
+// (otherwise the query fails with a type error -> 500).
 function validateIdParam(req, res, next, value) {
   if (!/^\d+$/.test(String(value)) || Number(value) > 2147483647) {
     return res.status(400).json({ error: 'id must be a positive integer' });
@@ -24,23 +24,39 @@ function trimBody(req, res, next) {
   next();
 }
 
-// Map known Postgres errors to client errors; anything else is a real 500.
+// The PostgreSQL error code behind an error, whether it came from Prisma Client (P2xxx codes),
+// from a raw query, or from the pg driver underneath.
+function pgCode(err) {
+  const byPrisma = { P2002: '23505', P2003: '23503', P2000: '22001', P2007: '22P02' };
+  if (byPrisma[err?.code]) return byPrisma[err.code];
+  const nested = err?.meta?.code ?? err?.meta?.driverAdapterError?.cause?.originalCode ?? err?.cause?.originalCode ?? err?.cause?.code;
+  if (/^[0-9A-Z]{5}$/.test(String(nested ?? ''))) return String(nested);
+  if (/^[0-9][0-9A-Z]{4}$/.test(String(err?.code ?? ''))) return err.code;
+  return null;
+}
+
+// Prisma's "record to update/delete does not exist".
+const isNotFound = (err) => err?.code === 'P2025';
+
+// Map known database errors to client errors; anything else is a real 500.
 function handleDbError(res, err) {
   if (err.name === 'HttpError') { // HttpError from bookings.js: a deliberate, user-facing refusal
     return res.status(err.status).json({ error: err.message, ...(err.extra || {}) });
   }
-  if (err.code === '23503') { // foreign_key_violation
+  const code = pgCode(err);
+  if (code === '23503') { // foreign_key_violation
     return res.status(400).json({ error: 'a referenced venue, device or student does not exist' });
   }
-  if (err.code === '23505') { // unique_violation
+  if (code === '23505') { // unique_violation
     return res.status(409).json({ error: 'a record with those details already exists' });
   }
-  if (err.code === '22001') { // string_data_right_truncation (value longer than the column)
+  if (code === '22001') { // string_data_right_truncation (value longer than the column)
     return res.status(400).json({ error: 'a field is too long' });
   }
-  if (err.code === '22P02' || err.code === '22007' || err.code === '22008') { // bad input syntax / date
+  if (code === '22P02' || code === '22007' || code === '22008' || err.name === 'PrismaClientValidationError') { // bad input
     return res.status(400).json({ error: 'one or more fields have an invalid format' });
   }
+  if (isNotFound(err)) return res.status(404).json({ error: 'not found' });
   console.error(err);
   return res.status(500).json({ error: 'internal server error' });
 }
@@ -56,8 +72,11 @@ function keyMatches(presented, stored) {
 // A device counts as 'active' only while its heartbeat is fresh; otherwise 'inactive'.
 // Derived at read time so a device that dies does not stay "online" forever.
 const HEARTBEAT_TIMEOUT_SECONDS = parseInt(process.env.HEARTBEAT_TIMEOUT_SECONDS, 10) || 120;
-const LIVE_STATUS = `CASE WHEN last_seen IS NOT NULL
-  AND last_seen > NOW() - make_interval(secs => ${HEARTBEAT_TIMEOUT_SECONDS})
-  THEN 'active' ELSE 'inactive' END`;
+const liveStatus = (lastSeen) =>
+  (lastSeen && Date.now() - new Date(lastSeen).getTime() < HEARTBEAT_TIMEOUT_SECONDS * 1000 ? 'active' : 'inactive');
 
-module.exports = { trimBody, validateIdParam, isId, handleDbError, keyMatches, LIVE_STATUS };
+// 'YYYY-MM-DD' <-> the Date Prisma uses for a DATE column (midnight UTC).
+const toDbDate = (s) => new Date(`${s}T00:00:00Z`);
+const fromDbDate = (d) => (d ? new Date(d).toISOString().slice(0, 10) : d);
+
+module.exports = { trimBody, validateIdParam, isId, handleDbError, pgCode, isNotFound, keyMatches, liveStatus, toDbDate, fromDbDate };

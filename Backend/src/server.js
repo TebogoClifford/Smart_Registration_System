@@ -1,9 +1,9 @@
 const express = require('express');
 const cors = require('cors');
-require('dotenv').config();
+require('dotenv').config({ quiet: true });
 
 const { trimBody } = require('./http');
-const { ensureSchema } = require('./schema');
+const prisma = require('./db');
 const auth = require('./auth');
 const venuesRouter = require('./routes/venues');
 const devicesRouter = require('./routes/devices');
@@ -52,11 +52,13 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'internal server error' });
 });
 
-// Prepare the database (Neon may take a few seconds to wake up), then start listening.
+// Wait for the database (Neon may take a few seconds to wake up), then start listening.
+// The tables themselves are created and upgraded by Prisma Migrate (`npm start` runs
+// `prisma migrate deploy` first; see prisma/migrations).
 async function start() {
   for (let attempt = 1; ; attempt++) {
     try {
-      await ensureSchema();
+      await prisma.$queryRaw`SELECT 1`;
       await auth.seedAdmin();
       break;
     } catch (err) {

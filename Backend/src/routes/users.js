@@ -6,12 +6,12 @@
 // their own at the next sign-in (must_change_password), unless the administrator unticks that.
 const express = require('express');
 const router = express.Router();
-const pool = require('../db');
+const prisma = require('../db');
 const auth = require('../auth');
-const { validateIdParam, handleDbError } = require('../http');
+const { validateIdParam, handleDbError, pgCode, isNotFound } = require('../http');
 
 const ROLES = ['admin', 'invigilator'];
-const COLS = auth.USER_COLS;
+const SELECT = auth.USER_SELECT;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PHONE_RE = /^\+?[0-9 ()-]{7,20}$/;
 const STAFF_RE = /^[A-Za-z0-9/-]{1,30}$/;
@@ -29,17 +29,14 @@ function details(body) {
 }
 
 const duplicate = (err, res) => {
-  if (err.code !== '23505') return false;
-  const what = /staff_number/.test(err.constraint || err.detail || '') ? 'staff number' : 'email';
+  if (pgCode(err) !== '23505') return false;
+  const what = /staff_number/.test(JSON.stringify(err.meta ?? {}) + (err.message ?? '')) ? 'staff number' : 'email';
   res.status(409).json({ error: `an account with that ${what} already exists` });
   return true;
 };
 
 // Never leave the system without an active administrator.
-async function otherActiveAdmins(id) {
-  const { rows } = await pool.query("SELECT COUNT(*)::int AS n FROM users WHERE role = 'admin' AND active AND id <> $1", [id]);
-  return rows[0].n;
-}
+const otherActiveAdmins = (id) => prisma.users.count({ where: { role: 'admin', active: true, id: { not: id } } });
 
 router.param('id', validateIdParam);
 router.use(auth.requireAdmin);
@@ -47,8 +44,7 @@ router.use(auth.requireAdmin);
 // GET /api/users — never returns password hashes
 router.get('/', async (req, res) => {
   try {
-    const { rows } = await pool.query(`SELECT ${COLS} FROM users ORDER BY role, name`);
-    res.json(rows);
+    res.json(await prisma.users.findMany({ select: SELECT, orderBy: [{ role: 'asc' }, { name: 'asc' }] }));
   } catch (err) { handleDbError(res, err); }
 });
 
@@ -68,12 +64,14 @@ router.post('/', async (req, res) => {
   if (given && given.length < 8) return res.status(400).json({ error: 'password must be at least 8 characters' });
   const password = given || auth.temporaryPassword();
   try {
-    const { rows } = await pool.query(
-      `INSERT INTO users (email, name, password_hash, role, staff_number, phone, must_change_password)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING ${COLS}`,
-      [email, name, await auth.hashPassword(password), role, d.staff_number ?? null, d.phone ?? null, mustChange]
-    );
-    res.status(201).json(given ? rows[0] : { ...rows[0], temporaryPassword: password });
+    const user = await prisma.users.create({
+      data: {
+        email, name, role, password_hash: await auth.hashPassword(password),
+        staff_number: d.staff_number ?? null, phone: d.phone ?? null, must_change_password: mustChange,
+      },
+      select: SELECT,
+    });
+    res.status(201).json(given ? user : { ...user, temporaryPassword: password });
   } catch (err) {
     if (!duplicate(err, res)) handleDbError(res, err);
   }
@@ -99,27 +97,19 @@ router.put('/:id', async (req, res) => {
   if (active === false && req.user && req.user.id === id) return res.status(409).json({ error: 'you cannot disable your own account' });
   try {
     if (role === 'invigilator' || active === false) {
-      const cur = await pool.query('SELECT role FROM users WHERE id = $1', [id]);
-      if (cur.rows[0]?.role === 'admin' && (await otherActiveAdmins(id)) === 0) {
+      const cur = await prisma.users.findUnique({ where: { id }, select: { role: true } });
+      if (cur?.role === 'admin' && (await otherActiveAdmins(id)) === 0) {
         return res.status(409).json({ error: 'there must be at least one active administrator' });
       }
     }
-    const hash = password === undefined ? null : await auth.hashPassword(password);
-    const mustChange = password === undefined ? null : b.mustChangePassword !== false;
-    const { rows } = await pool.query(
-      `UPDATE users SET
-         name = COALESCE($2, name), email = COALESCE($3, email), password_hash = COALESCE($4, password_hash),
-         role = COALESCE($5, role), active = COALESCE($6, active),
-         staff_number = CASE WHEN $7::boolean THEN $8 ELSE staff_number END,
-         phone = CASE WHEN $9::boolean THEN $10 ELSE phone END,
-         must_change_password = COALESCE($11, must_change_password)
-       WHERE id = $1 RETURNING ${COLS}`,
-      [id, name ?? null, email ?? null, hash, role ?? null, active ?? null,
-        d.staff_number !== undefined, d.staff_number ?? null, d.phone !== undefined, d.phone ?? null, mustChange]
-    );
-    if (rows.length === 0) return res.status(404).json({ error: 'account not found' });
-    res.json(rows[0]);
+    const data = { name, email, role, active, staff_number: d.staff_number, phone: d.phone }; // undefined = leave as is
+    if (password !== undefined) {
+      data.password_hash = await auth.hashPassword(password);
+      data.must_change_password = b.mustChangePassword !== false;
+    }
+    res.json(await prisma.users.update({ where: { id }, data, select: SELECT }));
   } catch (err) {
+    if (isNotFound(err)) return res.status(404).json({ error: 'account not found' });
     if (!duplicate(err, res)) handleDbError(res, err);
   }
 });
@@ -129,13 +119,16 @@ router.put('/:id', async (req, res) => {
 router.post('/:id/reset-password', async (req, res) => {
   const password = auth.temporaryPassword();
   try {
-    const { rows } = await pool.query(
-      `UPDATE users SET password_hash = $2, must_change_password = TRUE WHERE id = $1 RETURNING ${COLS}`,
-      [req.params.id, await auth.hashPassword(password)]
-    );
-    if (rows.length === 0) return res.status(404).json({ error: 'account not found' });
-    res.json({ ...rows[0], temporaryPassword: password });
-  } catch (err) { handleDbError(res, err); }
+    const user = await prisma.users.update({
+      where: { id: Number(req.params.id) },
+      data: { password_hash: await auth.hashPassword(password), must_change_password: true },
+      select: SELECT,
+    });
+    res.json({ ...user, temporaryPassword: password });
+  } catch (err) {
+    if (isNotFound(err)) return res.status(404).json({ error: 'account not found' });
+    handleDbError(res, err);
+  }
 });
 
 // DELETE /api/users/:id — cannot delete yourself or the last active administrator
@@ -143,12 +136,12 @@ router.delete('/:id', async (req, res) => {
   const id = Number(req.params.id);
   if (req.user && req.user.id === id) return res.status(409).json({ error: 'you cannot delete your own account' });
   try {
-    const cur = await pool.query('SELECT role FROM users WHERE id = $1', [id]);
-    if (cur.rows.length === 0) return res.status(404).json({ error: 'account not found' });
-    if (cur.rows[0].role === 'admin' && (await otherActiveAdmins(id)) === 0) {
+    const cur = await prisma.users.findUnique({ where: { id }, select: { role: true } });
+    if (!cur) return res.status(404).json({ error: 'account not found' });
+    if (cur.role === 'admin' && (await otherActiveAdmins(id)) === 0) {
       return res.status(409).json({ error: 'cannot delete the last active administrator' });
     }
-    await pool.query('DELETE FROM users WHERE id = $1', [id]);
+    await prisma.users.delete({ where: { id } });
     res.status(204).send();
   } catch (err) { handleDbError(res, err); }
 });

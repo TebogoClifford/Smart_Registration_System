@@ -6,7 +6,7 @@
 //    The server can check the signature without storing sessions.
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
-const pool = require('./db');
+const prisma = require('./db');
 
 const TOKEN_HOURS = parseInt(process.env.TOKEN_HOURS, 10) || 12;
 const SECRET = process.env.JWT_SECRET || '';
@@ -53,7 +53,10 @@ function temporaryPassword() {
 }
 
 // The account fields that are safe to send to the browser (never password_hash).
-const USER_COLS = 'id, email, name, role, staff_number, phone, active, must_change_password, last_login_at, created_at';
+const USER_SELECT = {
+  id: true, email: true, name: true, role: true, staff_number: true, phone: true,
+  active: true, must_change_password: true, last_login_at: true, created_at: true,
+};
 
 // A real hash to compare against when the email does not exist, so "unknown email" and
 // "wrong password" take about the same time (stops attackers listing which emails exist).
@@ -114,10 +117,10 @@ async function gate(req, res, next) {
   try {
     const claims = jwt.verify(token, SECRET, { algorithms: ['HS256'] });
     // look the user up each time so deleting or disabling an account takes effect immediately
-    const { rows } = await pool.query(`SELECT ${USER_COLS} FROM users WHERE id = $1`, [claims.sub]);
-    if (rows.length === 0) return res.status(401).json({ error: 'account no longer exists' });
-    if (!rows[0].active) return res.status(401).json({ error: 'this account has been disabled, contact an administrator' });
-    req.user = rows[0];
+    const user = Number.isInteger(claims.sub) ? await prisma.users.findUnique({ where: { id: claims.sub }, select: USER_SELECT }) : null;
+    if (!user) return res.status(401).json({ error: 'account no longer exists' });
+    if (!user.active) return res.status(401).json({ error: 'this account has been disabled, contact an administrator' });
+    req.user = user;
     if (req.user.must_change_password && !matches(PASSWORD_CHANGE_ROUTES, req)) {
       return res.status(403).json({ error: 'choose a new password first', code: 'PASSWORD_CHANGE_REQUIRED' });
     }
@@ -143,20 +146,22 @@ async function seedAdmin() {
     console.warn('⚠️  AUTH_DISABLED=true: sign-in is OFF and the API is open. Never use this on a real server.');
     return;
   }
-  const { rows } = await pool.query('SELECT COUNT(*)::int AS n FROM users');
-  if (rows[0].n > 0) return;
+  if ((await prisma.users.count()) > 0) return;
   const email = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
   const password = process.env.ADMIN_PASSWORD || '';
   if (!email || password.length < 8) {
     console.warn('⚠️  Sign-in is on but there are no accounts. Set ADMIN_EMAIL and ADMIN_PASSWORD (8+ chars) and restart.');
     return;
   }
-  await pool.query('INSERT INTO users (email, name, password_hash, role) VALUES ($1, $2, $3, \'admin\') ON CONFLICT (email) DO NOTHING',
-    [email, 'Administrator', await hashPassword(password)]);
+  await prisma.users.upsert({
+    where: { email },
+    update: {},
+    create: { email, name: 'Administrator', password_hash: await hashPassword(password), role: 'admin' },
+  });
   console.log(`✅ Created first account: ${email}`);
 }
 
 module.exports = {
   authEnabled, isAdmin, requireAdmin, hashPassword, verifyPassword, getDummyHash, signToken,
-  throttleKey, isThrottled, recordFailure, clearFailures, gate, seedAdmin, temporaryPassword, USER_COLS,
+  throttleKey, isThrottled, recordFailure, clearFailures, gate, seedAdmin, temporaryPassword, USER_SELECT,
 };

@@ -13,7 +13,7 @@ Then:
 ```
 cd Backend
 npm install            # install packages
-npm start              # starts on http://localhost:3000 and creates the tables itself
+npm start              # applies the Prisma migrations (creates the tables), then starts on http://localhost:3000
 ```
 
 **2. Demo data** – in a second terminal:

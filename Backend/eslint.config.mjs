@@ -15,5 +15,5 @@ export default [
       "no-unused-vars": ["error", { argsIgnorePattern: "^_|^next$" }],
     },
   },
-  { ignores: ["node_modules/**"] },
+  { ignores: ["node_modules/**", "src/generated/**"] },
 ];

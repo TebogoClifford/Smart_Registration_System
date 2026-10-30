@@ -1,16 +1,25 @@
 const express = require('express');
 const router = express.Router();
-const pool = require('../db');
+const prisma = require('../db');
 const { validateIdParam, isId, handleDbError, keyMatches } = require('../http');
 const { enrol, unenrol, inTransaction } = require('../bookings');
 
-// Explicit column list: never SELECT * here, because the row also holds the enrolment photo (BYTEA).
-const STUDENT_SELECT = `
-  s.id, s.student_number, s.name, s.device_id, s.enrollment_status, s.enrollment_requested_at, s.course_name,
-  (s.enrollment_image IS NOT NULL) AS has_image,
-  COALESCE((SELECT json_agg(json_build_object('id', m.id, 'code', m.code, 'name', m.name) ORDER BY m.code)
-              FROM student_modules sm JOIN modules m ON m.id = sm.module_id WHERE sm.student_id = s.id), '[]'::json) AS modules`;
-const getStudent = async (db, id) => (await db.query(`SELECT ${STUDENT_SELECT} FROM students s WHERE s.id = $1`, [id])).rows[0];
+// Explicit field list: never load the enrolment photo (bytes) here; has_image says whether there is one.
+const STUDENT_SELECT = {
+  id: true, student_number: true, name: true, device_id: true, enrollment_status: true, enrollment_requested_at: true, course_name: true,
+  student_modules: { select: { modules: { select: { id: true, code: true, name: true } } }, orderBy: { modules: { code: 'asc' } } },
+};
+const shape = ({ student_modules: sm, ...s }, withImage) => ({ ...s, has_image: withImage.has(s.id), modules: sm.map((x) => x.modules) });
+// ids (of `ids`, or of everyone) that have an enrolment photo, without loading the photos
+const idsWithImage = async (ids) => new Set((await prisma.students.findMany({
+  where: { enrollment_image: { not: null }, ...(ids && { id: { in: ids } }) }, select: { id: true },
+})).map((r) => r.id));
+async function getStudent(id) {
+  const s = await prisma.students.findUnique({ where: { id: Number(id) }, select: STUDENT_SELECT });
+  return s ? shape(s, await idsWithImage([s.id])) : undefined;
+}
+// the device a student is enrolled on, with its key (to check X-Device-Key)
+const studentDevice = (id) => prisma.students.findUnique({ where: { id: Number(id) }, select: { id: true, devices: { select: { api_key: true } } } });
 
 const cleanCourse = (c) => (c === undefined || c === null || String(c).trim() === '' ? null : String(c).trim());
 
@@ -28,19 +37,18 @@ router.post('/', async (req, res) => {
   if (!isId(device_id)) return res.status(400).json({ error: 'device_id must be a positive integer' });
   try {
     // Same student enrolled twice on the same device would give two embeddings for one person.
-    const dup = await pool.query(
-      'SELECT id FROM students WHERE student_number = $1 AND device_id = $2',
-      [student_number, device_id]
-    );
-    if (dup.rows.length > 0) {
+    const dup = await prisma.students.findFirst({ where: { student_number: String(student_number), device_id: Number(device_id) }, select: { id: true } });
+    if (dup) {
       return res.status(409).json({ error: 'this student number is already registered on that device' });
     }
-    const result = await pool.query(
-      `INSERT INTO students (student_number, name, device_id, course_name, enrollment_status, enrollment_requested_at)
-       VALUES ($1, $2, $3, $4, 'pending', NOW()) RETURNING id`,
-      [student_number, name, device_id, course_name]
-    );
-    res.status(201).json(await getStudent(pool, result.rows[0].id));
+    const created = await prisma.students.create({
+      data: {
+        student_number: String(student_number), name: String(name), device_id: Number(device_id), course_name,
+        enrollment_status: 'pending', enrollment_requested_at: new Date(),
+      },
+      select: { id: true },
+    });
+    res.status(201).json(await getStudent(created.id));
   } catch (err) {
     handleDbError(res, err);
   }
@@ -49,8 +57,11 @@ router.post('/', async (req, res) => {
 // GET /api/students — list all students
 router.get('/', async (req, res) => {
   try {
-    const result = await pool.query(`SELECT ${STUDENT_SELECT} FROM students s ORDER BY s.id`);
-    res.json(result.rows);
+    const [rows, withImage] = await Promise.all([
+      prisma.students.findMany({ select: STUDENT_SELECT, orderBy: { id: 'asc' } }),
+      idsWithImage(),
+    ]);
+    res.json(rows.map((s) => shape(s, withImage)));
   } catch (err) {
     handleDbError(res, err);
   }
@@ -59,7 +70,7 @@ router.get('/', async (req, res) => {
 // GET /api/students/:id
 router.get('/:id', async (req, res) => {
   try {
-    const student = await getStudent(pool, req.params.id);
+    const student = await getStudent(req.params.id);
     if (!student) return res.status(404).json({ error: 'student not found' });
     res.json(student);
   } catch (err) {
@@ -77,19 +88,18 @@ router.put('/:id', async (req, res) => {
   }
   if (!isId(device_id)) return res.status(400).json({ error: 'device_id must be a positive integer' });
   try {
-    const dup = await pool.query(
-      'SELECT id FROM students WHERE student_number = $1 AND device_id = $2 AND id <> $3',
-      [student_number, device_id, id]
-    );
-    if (dup.rows.length > 0) {
+    const dup = await prisma.students.findFirst({
+      where: { student_number: String(student_number), device_id: Number(device_id), id: { not: Number(id) } }, select: { id: true },
+    });
+    if (dup) {
       return res.status(409).json({ error: 'this student number is already registered on that device' });
     }
-    const result = await pool.query(
-      'UPDATE students SET student_number = $1, name = $2, device_id = $3, course_name = $4 WHERE id = $5 RETURNING id',
-      [student_number, name, device_id, course_name, id]
-    );
-    if (result.rows.length === 0) return res.status(404).json({ error: 'student not found' });
-    res.json(await getStudent(pool, id));
+    const { count } = await prisma.students.updateMany({
+      where: { id: Number(id) },
+      data: { student_number: String(student_number), name: String(name), device_id: Number(device_id), course_name },
+    });
+    if (count === 0) return res.status(404).json({ error: 'student not found' });
+    res.json(await getStudent(id));
   } catch (err) {
     handleDbError(res, err);
   }
@@ -99,13 +109,12 @@ router.put('/:id', async (req, res) => {
 // (after a failed capture, or to replace a poor one). The device picks it up on its next poll.
 router.post('/:id/re-enroll', async (req, res) => {
   try {
-    const { rows } = await pool.query(
-      `UPDATE students SET enrollment_status = 'pending', enrollment_requested_at = NOW()
-       WHERE id = $1 RETURNING id`,
-      [req.params.id]
-    );
-    if (rows.length === 0) return res.status(404).json({ error: 'student not found' });
-    res.json(await getStudent(pool, req.params.id));
+    const { count } = await prisma.students.updateMany({
+      where: { id: Number(req.params.id) },
+      data: { enrollment_status: 'pending', enrollment_requested_at: new Date() },
+    });
+    if (count === 0) return res.status(404).json({ error: 'student not found' });
+    res.json(await getStudent(req.params.id));
   } catch (err) {
     handleDbError(res, err);
   }
@@ -119,16 +128,13 @@ router.put('/:id/enrollment', async (req, res) => {
     return res.status(400).json({ error: "status must be 'enrolled' or 'failed'" });
   }
   try {
-    const found = await pool.query(
-      `SELECT s.id, d.api_key FROM students s JOIN devices d ON d.id = s.device_id WHERE s.id = $1`,
-      [req.params.id]
-    );
-    if (found.rows.length === 0) return res.status(404).json({ error: 'student not found' });
-    if (!keyMatches(req.get('X-Device-Key'), found.rows[0].api_key)) {
+    const found = await studentDevice(req.params.id);
+    if (!found?.devices) return res.status(404).json({ error: 'student not found' });
+    if (!keyMatches(req.get('X-Device-Key'), found.devices.api_key)) {
       return res.status(401).json({ error: 'invalid or missing device key' });
     }
-    await pool.query('UPDATE students SET enrollment_status = $1 WHERE id = $2', [status, req.params.id]);
-    res.json(await getStudent(pool, req.params.id));
+    await prisma.students.update({ where: { id: found.id }, data: { enrollment_status: status } });
+    res.json(await getStudent(found.id));
   } catch (err) {
     handleDbError(res, err);
   }
@@ -137,22 +143,16 @@ router.put('/:id/enrollment', async (req, res) => {
 // DELETE /api/students/:id — access history is kept (audit trail): events lose the student link
 // (access_events.student_id is nullable) instead of blocking the delete or being removed.
 router.delete('/:id', async (req, res) => {
-  const client = await pool.connect();
+  const id = Number(req.params.id);
   try {
-    await client.query('BEGIN');
-    await client.query('UPDATE access_events SET student_id = NULL WHERE student_id = $1', [req.params.id]);
-    const result = await client.query('DELETE FROM students WHERE id = $1 RETURNING id', [req.params.id]);
-    if (result.rows.length === 0) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ error: 'student not found' });
-    }
-    await client.query('COMMIT');
+    const deleted = await prisma.$transaction(async (tx) => {
+      await tx.access_events.updateMany({ where: { student_id: id }, data: { student_id: null } });
+      return (await tx.students.deleteMany({ where: { id } })).count;
+    });
+    if (deleted === 0) return res.status(404).json({ error: 'student not found' });
     res.status(204).send();
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
     handleDbError(res, err);
-  } finally {
-    client.release();
   }
 });
 
@@ -161,7 +161,7 @@ router.delete('/:id', async (req, res) => {
 // dropped modules free theirs. If any seat cannot be given (hall full, clash) nothing changes.
 router.get('/:id/modules', async (req, res) => {
   try {
-    const student = await getStudent(pool, req.params.id);
+    const student = await getStudent(req.params.id);
     if (!student) return res.status(404).json({ error: 'student not found' });
     res.json(student.modules);
   } catch (err) { handleDbError(res, err); }
@@ -174,14 +174,14 @@ router.put('/:id/modules', async (req, res) => {
   }
   const wanted = [...new Set(ids.map(Number))];
   try {
-    if (!(await getStudent(pool, req.params.id))) return res.status(404).json({ error: 'student not found' });
-    await inTransaction(pool, async (client) => {
-      const sid = Number(req.params.id);
-      const have = (await client.query('SELECT module_id FROM student_modules WHERE student_id = $1', [sid])).rows.map((r) => r.module_id);
-      for (const m of have.filter((x) => !wanted.includes(x))) await unenrol(client, sid, m);
-      for (const m of wanted.filter((x) => !have.includes(x))) await enrol(client, sid, m);
+    const sid = Number(req.params.id);
+    if (!(await prisma.students.findUnique({ where: { id: sid }, select: { id: true } }))) return res.status(404).json({ error: 'student not found' });
+    await inTransaction(prisma, async (tx) => {
+      const have = (await tx.student_modules.findMany({ where: { student_id: sid }, select: { module_id: true } })).map((r) => r.module_id);
+      for (const m of have.filter((x) => !wanted.includes(x))) await unenrol(tx, sid, m);
+      for (const m of wanted.filter((x) => !have.includes(x))) await enrol(tx, sid, m);
     });
-    res.json((await getStudent(pool, req.params.id)).modules);
+    res.json((await getStudent(sid)).modules);
   } catch (err) { handleDbError(res, err); }
 });
 
@@ -192,11 +192,10 @@ router.put('/:id/enrollment-image', express.raw({ type: 'image/jpeg', limit: '1m
     return res.status(415).json({ error: 'send the photo as the raw body with Content-Type: image/jpeg (max 1 MB)' });
   }
   try {
-    const found = await pool.query(
-      'SELECT s.id, d.api_key FROM students s JOIN devices d ON d.id = s.device_id WHERE s.id = $1', [req.params.id]);
-    if (found.rows.length === 0) return res.status(404).json({ error: 'student not found' });
-    if (!keyMatches(req.get('X-Device-Key'), found.rows[0].api_key)) return res.status(401).json({ error: 'invalid or missing device key' });
-    await pool.query('UPDATE students SET enrollment_image = $1, enrollment_image_type = $2 WHERE id = $3', [req.body, 'image/jpeg', req.params.id]);
+    const found = await studentDevice(req.params.id);
+    if (!found?.devices) return res.status(404).json({ error: 'student not found' });
+    if (!keyMatches(req.get('X-Device-Key'), found.devices.api_key)) return res.status(401).json({ error: 'invalid or missing device key' });
+    await prisma.students.update({ where: { id: found.id }, data: { enrollment_image: req.body, enrollment_image_type: 'image/jpeg' } });
     res.status(204).send();
   } catch (err) { handleDbError(res, err); }
 });
@@ -204,10 +203,10 @@ router.put('/:id/enrollment-image', express.raw({ type: 'image/jpeg', limit: '1m
 // GET /api/students/:id/enrollment-image — for the web console (signed-in users only)
 router.get('/:id/enrollment-image', async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT enrollment_image, enrollment_image_type FROM students WHERE id = $1', [req.params.id]);
-    if (rows.length === 0) return res.status(404).json({ error: 'student not found' });
-    if (!rows[0].enrollment_image) return res.status(404).json({ error: 'no enrolment photo stored' });
-    res.set('Content-Type', rows[0].enrollment_image_type || 'image/jpeg').set('Cache-Control', 'private, no-store').send(rows[0].enrollment_image);
+    const row = await prisma.students.findUnique({ where: { id: Number(req.params.id) }, select: { enrollment_image: true, enrollment_image_type: true } });
+    if (!row) return res.status(404).json({ error: 'student not found' });
+    if (!row.enrollment_image) return res.status(404).json({ error: 'no enrolment photo stored' });
+    res.set('Content-Type', row.enrollment_image_type || 'image/jpeg').set('Cache-Control', 'private, no-store').send(Buffer.from(row.enrollment_image));
   } catch (err) { handleDbError(res, err); }
 });
 

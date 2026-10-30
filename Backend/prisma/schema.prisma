@@ -1,0 +1,139 @@
+generator client {
+  provider        = "prisma-client"
+  output          = "../src/generated/prisma"
+  previewFeatures = ["partialIndexes"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model access_events {
+  id              Int               @id @default(autoincrement())
+  device_id       Int
+  student_id      Int?
+  decision        String            @db.VarChar(10)
+  event_time      DateTime?         @default(now()) @db.Timestamp(6)
+  client_event_id String?           @db.VarChar(64)
+  devices         devices           @relation(fields: [device_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  students        students?         @relation(fields: [student_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  event_overrides event_overrides[]
+
+  @@unique([device_id, client_event_id], map: "uq_events_device_client_id", where: raw("(client_event_id IS NOT NULL)"))
+  @@index([event_time(sort: Desc)], map: "idx_events_time")
+}
+
+model devices {
+  id            Int             @id @default(autoincrement())
+  venue_id      Int
+  name          String          @db.VarChar(100)
+  api_key       String          @db.VarChar(64)
+  status        String          @default("inactive") @db.VarChar(20)
+  last_seen     DateTime?       @db.Timestamptz(6)
+  access_events access_events[]
+  venues        venues          @relation(fields: [venue_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  students      students[]
+}
+
+model event_overrides {
+  id             Int           @id @default(autoincrement())
+  event_id       Int
+  invigilator_id String        @db.VarChar(255)
+  reason         String
+  created_at     DateTime?     @default(now()) @db.Timestamptz(6)
+  access_events  access_events @relation(fields: [event_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([event_id], map: "idx_overrides_event_id")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model exam_bookings {
+  id                Int                 @id @default(autoincrement())
+  module_id         Int
+  venue_id          Int
+  exam_date         DateTime            @db.Date
+  slot              String              @db.Char(5)
+  booked_by         String?             @db.VarChar(255)
+  created_at        DateTime?           @default(now()) @db.Timestamptz(6)
+  modules           modules             @relation(fields: [module_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  venues            venues              @relation(fields: [venue_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  seat_reservations seat_reservations[]
+
+  @@unique([module_id, exam_date, slot])
+}
+
+model modules {
+  id              Int               @id @default(autoincrement())
+  code            String            @unique @db.VarChar(20)
+  name            String            @db.VarChar(100)
+  created_at      DateTime?         @default(now()) @db.Timestamptz(6)
+  exam_bookings   exam_bookings[]
+  student_modules student_modules[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model seat_reservations {
+  booking_id    Int
+  student_id    Int
+  venue_id      Int
+  exam_date     DateTime      @db.Date
+  slot          String        @db.Char(5)
+  seat_number   Int
+  exam_bookings exam_bookings @relation(fields: [booking_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  students      students      @relation(fields: [student_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([booking_id, student_id])
+  @@unique([student_id, exam_date, slot])
+  @@unique([venue_id, exam_date, slot, seat_number])
+}
+
+model student_modules {
+  student_id Int
+  module_id  Int
+  modules    modules  @relation(fields: [module_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  students   students @relation(fields: [student_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([student_id, module_id])
+  @@index([module_id], map: "idx_student_modules_module")
+}
+
+model students {
+  id                      Int                 @id @default(autoincrement())
+  student_number          String              @db.VarChar(20)
+  name                    String              @db.VarChar(100)
+  device_id               Int?
+  enrollment_status       String              @default("pending") @db.VarChar(20)
+  enrollment_image        Bytes?
+  enrollment_requested_at DateTime?           @default(now()) @db.Timestamptz(6)
+  enrollment_image_type   String?             @db.VarChar(30)
+  course_name             String?             @db.VarChar(100)
+  access_events           access_events[]
+  seat_reservations       seat_reservations[]
+  student_modules         student_modules[]
+  devices                 devices?            @relation(fields: [device_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+/// This model contains an expression index which requires additional setup for migrations. Visit https://pris.ly/d/expression-indexes for more info.
+model users {
+  id                   Int       @id @default(autoincrement())
+  email                String    @unique @db.VarChar(255)
+  name                 String    @db.VarChar(100)
+  password_hash        String
+  created_at           DateTime? @default(now()) @db.Timestamptz(6)
+  role                 String    @default("invigilator") @db.VarChar(20)
+  staff_number         String?   @db.VarChar(30)
+  phone                String?   @db.VarChar(30)
+  active               Boolean   @default(true)
+  must_change_password Boolean   @default(false)
+  last_login_at        DateTime? @db.Timestamptz(6)
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model venues {
+  id            Int             @id @default(autoincrement())
+  name          String          @db.VarChar(100)
+  created_at    DateTime?       @default(now()) @db.Timestamp(6)
+  capacity      Int             @default(0)
+  devices       devices[]
+  exam_bookings exam_bookings[]
+}

@@ -1,12 +1,14 @@
 const express = require('express');
 const router = express.Router();
-const pool = require('../db');
+const prisma = require('../db');
 
 // GET /api/stats — database-backed dashboard summaries and historical trends.
+// Reporting queries (FILTER counts, a generated 7-day calendar) have no Prisma Client equivalent, so they
+// use Prisma's tagged-template $queryRaw: still one client and connection pool, and no string-built SQL.
 router.get('/', async (req, res) => {
   try {
     const [eventStats, studentStats, dailyTrend, topVenues] = await Promise.all([
-      pool.query(`
+      prisma.$queryRaw`
         SELECT
           COUNT(*)::int AS total,
           COUNT(*) FILTER (WHERE decision = 'granted')::int AS granted,
@@ -15,15 +17,15 @@ router.get('/', async (req, res) => {
         FROM access_events
         WHERE event_time >= CURRENT_DATE
           AND event_time < CURRENT_DATE + INTERVAL '1 day'
-      `),
-      pool.query(`
+      `,
+      prisma.$queryRaw`
         SELECT
           COUNT(*) FILTER (WHERE enrollment_status = 'enrolled')::int AS enrolled,
           COUNT(*) FILTER (WHERE enrollment_status = 'pending')::int AS pending,
           COUNT(*)::int AS total
         FROM students
-      `),
-      pool.query(`
+      `,
+      prisma.$queryRaw`
         WITH days AS (
           SELECT generate_series(
             CURRENT_DATE - INTERVAL '6 days',
@@ -43,8 +45,8 @@ router.get('/', async (req, res) => {
          AND events.event_time < days.day + INTERVAL '1 day'
         GROUP BY days.day
         ORDER BY days.day
-      `),
-      pool.query(`
+      `,
+      prisma.$queryRaw`
         SELECT
           venues.id,
           venues.name,
@@ -60,11 +62,11 @@ router.get('/', async (req, res) => {
         GROUP BY venues.id, venues.name
         ORDER BY attempts DESC, venues.name ASC
         LIMIT 5
-      `)
+      `
     ]);
 
-    const today = eventStats.rows[0];
-    const students = studentStats.rows[0];
+    const today = eventStats[0];
+    const students = studentStats[0];
 
     // Keep the original response fields so existing dashboard clients remain compatible.
     res.json({
@@ -78,8 +80,8 @@ router.get('/', async (req, res) => {
       enrollmentRate: students.total > 0
         ? Math.round((students.enrolled / students.total) * 100)
         : 0,
-      dailyTrend: dailyTrend.rows,
-      topVenues: topVenues.rows
+      dailyTrend,
+      topVenues
     });
   } catch (err) {
     console.error('Failed to build dashboard statistics:', err);

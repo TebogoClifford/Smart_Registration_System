@@ -1,9 +1,9 @@
 // createUser.js — create an account from the command line (e.g. the first invigilator).
 //   npm run create-user -- <email> "<Full Name>" <password> [admin|invigilator]
 // It talks to whatever database DATABASE_URL points at, so run it deliberately.
-require('dotenv').config();
-const pool = require('./db');
-const { ensureSchema } = require('./schema');
+// The password given here is the person's own (no forced change at first sign-in).
+require('dotenv').config({ quiet: true });
+const prisma = require('./db');
 const { hashPassword } = require('./auth');
 
 async function main() {
@@ -14,14 +14,18 @@ async function main() {
   }
   if (!['admin', 'invigilator'].includes(role)) { console.error('role must be admin or invigilator'); process.exit(1); }
   if (password.length < 8) { console.error('password must be at least 8 characters'); process.exit(1); }
-  await ensureSchema();
   const email = emailArg.trim().toLowerCase();
-  const { rows } = await pool.query(
-    `INSERT INTO users (email, name, password_hash, role) VALUES ($1, $2, $3, $4)
-     ON CONFLICT (email) DO NOTHING RETURNING id`,
-    [email, name.trim(), await hashPassword(password), role]
-  );
-  console.log(rows.length ? `Created ${role} ${email} (id ${rows[0].id})` : `An account for ${email} already exists; nothing changed.`);
-  await pool.end();
+  if (await prisma.users.findUnique({ where: { email }, select: { id: true } })) {
+    console.log(`An account for ${email} already exists; nothing changed.`);
+    return;
+  }
+  const user = await prisma.users.create({
+    data: { email, name: name.trim(), password_hash: await hashPassword(password), role },
+    select: { id: true },
+  });
+  console.log(`Created ${role} ${email} (id ${user.id})`);
 }
-main().catch((e) => { console.error(e.message); process.exit(1); });
+
+main()
+  .catch((e) => { console.error(e.message); process.exitCode = 1; })
+  .finally(() => prisma.$disconnect());
