@@ -9,9 +9,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { api } from '@/lib/api';
 import { useDraft } from '@/lib/drafts';
 import OverrideDialog from '@/components/OverrideDialog';
-import ExamSittings from '@/components/ExamSittings';
+import ExamCalendarView from '@/components/ExamCalendarView';
 import RecognisedNow from '@/components/RecognisedNow';
-import { localDate, addDays, formatDay, groupSittings } from '@/lib/exams';
+import { localDate, addDays, groupSittings } from '@/lib/exams';
 import {
   RefreshCcw, Wifi, WifiOff, AlertCircle, Download, Filter, UserPlus, Search,
   Users, CheckCircle2, XCircle, Activity, TrendingUp, MapPin, ArrowUpRight, CalendarDays, Armchair
@@ -171,10 +171,10 @@ function ExamHallBookings({ refreshKey }) {
       <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-4 space-y-0 pb-3">
         <div>
           <CardTitle className="text-base font-bold text-slate-900">Exam hall bookings</CardTitle>
-          <p className="mt-1 text-xs text-slate-500">Today and the next {EXAM_DAYS_AHEAD} days</p>
+          <p className="mt-1 text-xs text-slate-500">Exam calendar · numbers for today and the next {EXAM_DAYS_AHEAD} days</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => navigate('/calendar')} className="gap-1.5 rounded-md"><CalendarDays size={14} /> Calendar</Button>
+          <Button variant="outline" size="sm" onClick={() => navigate('/calendar')} className="gap-1.5 rounded-md"><CalendarDays size={14} /> Open in Exam</Button>
           <Button size="sm" onClick={() => navigate('/bookings')} className="rounded-md">Book exam</Button>
         </div>
       </CardHeader>
@@ -193,13 +193,9 @@ function ExamHallBookings({ refreshKey }) {
             </div>
           ))}
         </div>
-        {failed ? <p className="text-sm text-rose-700">Exam bookings could not be loaded.</p>
-          : bookings === null ? <div className="space-y-3">{[1, 2].map((i) => <div key={i} className="h-20 animate-pulse rounded-md bg-slate-100" />)}</div>
-            : sittings.length === 0 ? <p className="py-6 text-center text-sm text-slate-500">No exams booked in the next {EXAM_DAYS_AHEAD} days.</p>
-              : <>
-                <ExamSittings sittings={sittings.slice(0, 6)} showDate formatDate={(d) => (d === today ? 'Today' : formatDay(d))} className="grid gap-3 md:grid-cols-2" />
-                {sittings.length > 6 && <button type="button" onClick={() => navigate('/calendar')} className="text-xs font-semibold text-blue-700 hover:text-blue-900">+{sittings.length - 6} more sittings in the calendar</button>}
-              </>}
+        {failed && <p className="text-sm text-rose-700">The numbers above could not be loaded.</p>}
+        {/* the same calendar as Exam > Exam calendar, with its own remembered month and day */}
+        <ExamCalendarView draftKey="dashcal" refreshKey={refreshKey} />
       </CardContent>
     </Card>
   );
@@ -444,29 +440,32 @@ export default function Dashboard() {
             <div className="overflow-x-auto">
               <Table>
                 <TableHeader><TableRow className="bg-slate-50/80 hover:bg-slate-50/80">
-                  <TableHead className="whitespace-nowrap px-5 py-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Time</TableHead>
-                  <TableHead className="whitespace-nowrap px-5 py-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Device</TableHead>
-                  <TableHead className="whitespace-nowrap px-5 py-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Student ID</TableHead>
-                  <TableHead className="whitespace-nowrap px-5 py-3 text-xs font-semibold uppercase tracking-wider text-slate-500">Decision</TableHead>
-                  <TableHead className="whitespace-nowrap px-5 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Event ID</TableHead>
-                  <TableHead className="whitespace-nowrap px-5 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Action</TableHead>
+                  <TableHead className="whitespace-nowrap px-5 py-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Time</TableHead>
+                  <TableHead className="whitespace-nowrap px-5 py-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Device</TableHead>
+                  <TableHead className="whitespace-nowrap px-5 py-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Student ID</TableHead>
+                  <TableHead className="whitespace-nowrap px-5 py-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Decision</TableHead>
+                  <TableHead className="whitespace-nowrap px-5 py-2 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Event ID</TableHead>
+                  <TableHead className="whitespace-nowrap px-5 py-2 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Action</TableHead>
                 </TableRow></TableHeader>
                 <TableBody>{filteredEvents.map((event) => {
                   const denied = String(event.decision || '').toLowerCase() === 'denied';
                   return <TableRow key={event.id ?? `${event.event_time}-${event.device_id}-${event.student_id}`} className={`transition-colors hover:bg-slate-50/80 ${denied ? 'bg-rose-50/40' : ''}`}>
-                    <TableCell className="whitespace-nowrap px-5 py-4">
-                      <div className="font-medium text-slate-800">{event.event_time ? new Date(event.event_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—'}</div>
-                      <div className="mt-0.5 text-xs text-slate-400">{event.event_time ? new Date(event.event_time).toLocaleDateString() : ''}</div>
+                    {/* slim rows: date and time on one line */}
+                    <TableCell className="whitespace-nowrap px-5 py-1.5">
+                      {event.event_time ? <>
+                        <span className="text-xs text-slate-400">{new Date(event.event_time).toLocaleDateString()}</span>{' '}
+                        <span className="font-medium text-slate-800">{new Date(event.event_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                      </> : '—'}
                     </TableCell>
-                    <TableCell className="px-5 py-4 font-medium text-slate-700">{event.device_id ?? 'Unknown device'}</TableCell>
-                    <TableCell className="px-5 py-4 font-mono text-xs text-slate-600">{event.student_id || 'N/A'}</TableCell>
-                    <TableCell className="px-5 py-4">{decisionBadge(event.decision)}</TableCell>
-                    <TableCell className="px-5 py-4 text-right font-mono text-xs text-slate-400">{event.id ?? '—'}</TableCell>
-                    <TableCell className="px-5 py-4 text-right">
+                    <TableCell className="px-5 py-1.5 font-medium text-slate-700">{event.device_id ?? 'Unknown device'}</TableCell>
+                    <TableCell className="px-5 py-1.5 font-mono text-xs text-slate-600">{event.student_id || 'N/A'}</TableCell>
+                    <TableCell className="px-5 py-1.5">{decisionBadge(event.decision)}</TableCell>
+                    <TableCell className="px-5 py-1.5 text-right font-mono text-xs text-slate-400">{event.id ?? '—'}</TableCell>
+                    <TableCell className="px-5 py-1.5 text-right">
                       {event.overridden
                         ? <Badge variant="outline">Overridden</Badge>
                         : event.id != null && !['granted', 'already'].includes(String(event.decision || '').toLowerCase())
-                          ? <Button variant="outline" size="sm" onClick={() => setOverrideFor(event)}>Override</Button>
+                          ? <Button variant="outline" size="xs" onClick={() => setOverrideFor(event)}>Override</Button>
                           : null}
                     </TableCell>
                   </TableRow>;
