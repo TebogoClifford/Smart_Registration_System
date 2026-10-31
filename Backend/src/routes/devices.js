@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const { validateIdParam, isId, handleDbError, isNotFound, liveStatus, toDbDate } = require('../http');
 const { requireDevice } = require('../deviceAuth');
 const auth = require('../auth');
-const { SLOTS, isValidDate, sessionAt } = require('../bookings');
+const { SLOTS, isValidDate, sessionAt, sessionEnd } = require('../bookings');
 const { insideIds } = require('../inside');
 
 const BATCH_MAX = 100; // keep in step with routes/accessEvents.js
@@ -181,8 +181,19 @@ router.get('/:id/session', requireDevice, async (req, res) => {
       onThisDevice: s.device_id === req.device.id && s.enrollment_status === 'enrolled',
     }));
     // students already let in during this session (at any door), so a restarted device still says "already inside"
-    const alreadyInside = await insideIds(prisma, { date, slot });
-    res.json({ venueId: req.device.venue_id, date, slot, serverTime: new Date().toISOString(), students, alreadyInside });
+    // after the session ends (12:00 / 16:00) everyone is signed out: nobody is inside any more
+    const endsAt = sessionEnd({ date, slot });
+    const ended = new Date() >= endsAt;
+    const alreadyInside = ended ? [] : await insideIds(prisma, { date, slot });
+    // from 12:00 to 13:00: students whose morning exam is over and who have no afternoon seat are signed out
+    let sessionEndedFor = [];
+    if (!ended && slot === SLOTS[1] && new Date() >= sessionEnd({ date, slot: SLOTS[0] })) {
+      const rows = await prisma.seat_reservations.findMany({ where: { exam_date: toDbDate(date) }, select: { student_id: true, slot: true } });
+      const afternoon = new Set(rows.filter((r) => r.slot === SLOTS[1]).map((r) => r.student_id));
+      sessionEndedFor = [...new Set(rows.filter((r) => r.slot === SLOTS[0] && !afternoon.has(r.student_id)).map((r) => r.student_id))];
+    }
+    res.json({ venueId: req.device.venue_id, date, slot, endsAt: endsAt.toISOString(), ended, serverTime: new Date().toISOString(),
+      students, alreadyInside, sessionEndedFor });
   } catch (err) {
     handleDbError(res, err);
   }

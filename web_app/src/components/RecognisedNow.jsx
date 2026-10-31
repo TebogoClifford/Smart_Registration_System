@@ -53,8 +53,10 @@ export default function RecognisedNow() {
   }, []);
 
   const fresh = latest && (now - new Date(latest.timestamp).getTime()) / 1000 < FRESH_SECONDS;
-  const repeat = latest?.decision === 'already'; // seen again after being let in this session
-  const boxTone = repeat ? 'border-sky-300 bg-sky-50/70' : fresh ? 'border-emerald-300 bg-emerald-50/60' : 'border-slate-200 bg-slate-50/60';
+  const repeat = latest?.decision === 'already' && latest?.status === 'inside'; // seen again after being let in this session
+  const ended = latest?.decision === 'ended'; // recognised after their exam session was over: not let in
+  const boxTone = ended ? 'border-rose-300 bg-rose-50/60' : repeat ? 'border-sky-300 bg-sky-50/70'
+    : fresh ? 'border-emerald-300 bg-emerald-50/60' : 'border-slate-200 bg-slate-50/60';
 
   return (
     <Card className="rounded-lg border-slate-200/80 shadow-sm">
@@ -85,10 +87,11 @@ export default function RecognisedNow() {
                   <div className="min-w-0 space-y-1 text-sm">
                     <p className="flex flex-wrap items-center gap-2">
                       <span className="text-lg font-bold text-slate-900">{latest.student.name}</span>
-                      {repeat && <span className="rounded-full bg-sky-600 px-2 py-0.5 text-[11px] font-semibold text-white">Already inside</span>}
-                      {fresh && !repeat && <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[11px] font-semibold text-white">just now</span>}
+                      <StatusPill r={latest} strong />
+                      {fresh && <span className="rounded-full bg-slate-700 px-2 py-0.5 text-[11px] font-semibold text-white">just now</span>}
                     </p>
                     {repeat && <p className="text-xs font-medium text-sky-800">Let in earlier this session; this sighting is not a second entry.</p>}
+                    {ended && <p className="text-xs font-medium text-rose-800">Not let in: their exam session had ended (students are signed out at 12:00 and 16:00).</p>}
                     <p className="font-mono text-xs text-slate-600">{latest.student.studentNumber}</p>
                     <p className="text-slate-600">{latest.student.course || 'Course not set'}</p>
                     <p className="flex items-center gap-1.5"><Armchair size={14} className="shrink-0 text-slate-400" /><SeatLine r={latest} /></p>
@@ -101,7 +104,7 @@ export default function RecognisedNow() {
                       <li key={r.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5 py-2">
                         <span className="min-w-0">
                           <span className="font-medium text-slate-800">{r.student.name}</span> <span className="font-mono text-xs text-slate-500">{r.student.studentNumber}</span>
-                          {r.decision === 'already' && <span className="ml-2 rounded-full bg-sky-100 px-1.5 py-0.5 text-[11px] font-semibold text-sky-800">Already inside</span>}
+                          <span className="ml-2"><StatusPill r={r} /></span>
                         </span>
                         <span className="text-xs text-slate-500">{r.seat ? `Seat ${r.seat.number} · ${r.seat.moduleCode}` : 'No seat'} · {r.device.name} · {ago(r.timestamp, now)}</span>
                       </li>
@@ -113,4 +116,20 @@ export default function RecognisedNow() {
       </CardContent>
     </Card>
   );
+}
+
+const clock = (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+// Where the student stands now: inside until their session ends, then signed out automatically;
+// 'Session ended' when they were recognised after it was over.
+function StatusPill({ r, strong = false }) {
+  const look = (solid, soft) => `rounded-full px-2 py-0.5 text-[11px] font-semibold ${strong ? solid : soft}`;
+  if (r.decision === 'ended') return <span className={look('bg-rose-600 text-white', 'bg-rose-100 text-rose-800')}>Session ended · denied</span>;
+  if (r.status === 'signed_out') return <span className={look('bg-slate-600 text-white', 'bg-slate-200 text-slate-700')}>Signed out {clock(r.session.endsAt)}</span>;
+  if (r.status === 'inside') {
+    return <span className={look(r.decision === 'already' ? 'bg-sky-600 text-white' : 'bg-emerald-600 text-white', r.decision === 'already' ? 'bg-sky-100 text-sky-800' : 'bg-emerald-100 text-emerald-800')}>
+      {r.decision === 'already' ? 'Already inside' : 'Inside'} · until {clock(r.session.endsAt)}
+    </span>;
+  }
+  return null;
 }

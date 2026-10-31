@@ -11,7 +11,7 @@ Plain HTTP(S) with JSON. The backend cannot call the device (it sits behind a ro
 1. `GET /health` until `ok`.
 2. `GET /api/devices/{id}/config` – read settings.
 3. `GET /api/devices/{id}/session` – load who may enter now.
-4. Loop: heartbeat / poll enrollments (every `enrollmentPollSeconds`), refresh the session every few minutes and at 09:00 / 12:00.
+4. Loop: heartbeat / poll enrollments (every `enrollmentPollSeconds`), refresh the session every few minutes and at 12:00 and 16:00.
 
 ## Endpoints
 
@@ -38,6 +38,9 @@ Students an invigilator asked this device to capture (not older than 10 min). `[
 
 ### GET /api/devices/{id}/session[?date=YYYY-MM-DD&slot=09:00]
 Who may enter this device's venue **now**. Without parameters the server uses the current session (before 12:00 → `09:00`, otherwise `13:00`, South African time).
+Sessions end at 12:00 (`09:00` slot) and 16:00 (`13:00` slot): the answer has `endsAt` and `ended`. Everyone let in is signed out
+automatically then (the server records a `signed_out` event). `alreadyInside` lists students let in during this session (empty once
+it has ended); `sessionEndedFor` lists students whose morning exam is over and who have no afternoon seat (12:00 to 13:00).
 ```json
 { "venueId": 2, "date": "2026-10-12", "slot": "09:00", "serverTime": "…",
   "students": [ { "studentId": 17, "studentNumber": "220123456", "name": "Thabo M.",
@@ -54,7 +57,9 @@ One decision. Body:
 ```json
 { "deviceId": 3, "decision": "granted", "studentId": 17, "clientEventId": "3-000142", "secondsAgo": 12 }
 ```
-* `decision`: `granted` | `denied` | `error` (error = capture/match failed). `studentId` may be omitted for an unknown face.
+* `decision`: `granted` | `denied` | `error` (error = capture/match failed) | `already` (let in earlier this session) | `ended`
+  (their session is over: not let in). `studentId` may be omitted for an unknown face. The server is the judge: a student is let
+  in once per session, so a second `granted` in a session is stored as `already`, and any decision after their session ended as `ended`.
 * `clientEventId` (max 64 chars): unique per device, e.g. `deviceId-counter`. If an upload is repeated after a WiFi drop the server answers `200` with the original event instead of storing a second one. `201` = created.
 * When the event happened: `timestamp` (ISO 8601, only if the device clock is set) **or** `secondsAgo` (no clock yet) **or** neither (= now).
 
@@ -63,7 +68,7 @@ Upload a queue after being offline. Body `{ "deviceId": 3, "events": [ {…same 
 ```json
 { "results": [ { "index": 0, "clientEventId": "3-000142", "status": "created", "id": 91 },
                { "index": 1, "clientEventId": "3-000143", "status": "duplicate", "id": 77 },
-               { "index": 2, "clientEventId": "3-000144", "status": "rejected", "error": "decision must be 'granted', 'denied' or 'error'" } ] }
+               { "index": 2, "clientEventId": "3-000144", "status": "rejected", "error": "decision must be 'granted', 'denied', 'error', 'already' or 'ended'" } ] }
 ```
 Remove `created` and `duplicate` events from the queue; fix or drop `rejected` ones. 
 

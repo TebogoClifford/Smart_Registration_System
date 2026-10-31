@@ -17,6 +17,7 @@ const modulesRouter = require('./routes/modules');
 const bookingsRouter = require('./routes/bookings');
 const emailsRouter = require('./routes/emails');
 const { emailStatus, processOutbox } = require('./email');
+const { startSignOutTimer } = require('./signout');
 
 const app = express();
 app.set('trust proxy', 1); // Render sits behind a proxy; this makes req.ip the real client address
@@ -80,6 +81,8 @@ async function start() {
     console.log(`Exam emails: ${mail.mode === 'log' ? 'not set up (recorded only)' : mail.mode === 'test' ? `TEST MODE, only to ${mail.testTo.join(', ') || 'nobody'}` : 'live'}`);
     // emails still waiting from before a restart
     processOutbox(prisma).catch((e) => console.error('Email sending failed:', e.message));
+    // students are signed out when their exam session ends (12:00 / 16:00)
+    startSignOutTimer(prisma);
   });
   server.on('error', (err) => { console.error('Server error:', err.message); process.exit(1); });
 }

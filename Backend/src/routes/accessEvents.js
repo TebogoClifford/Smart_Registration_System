@@ -3,13 +3,15 @@ const router = express.Router();
 const prisma = require('../db');
 const { validateIdParam, isId, handleDbError, pgCode, toDbDate } = require('../http');
 const { requireDevice } = require('../deviceAuth');
-const { sessionAt } = require('../bookings');
+const { sessionAt, sessionEnd, seatSession } = require('../bookings');
 const { wasLetIn } = require('../inside');
+const { signOutIfDue, signOutSoon } = require('../signout');
 
 router.param('id', validateIdParam);
 
-// 'error' = device could not capture/match; 'already' = recognised again after being let in this session
-const DECISIONS = ['granted', 'denied', 'error', 'already'];
+// 'error' = device could not capture/match; 'already' = recognised again after being let in this session;
+// 'ended' = denied because their exam session is over. ('signed_out' is added by the server only, see signout.js.)
+const DECISIONS = ['granted', 'denied', 'error', 'already', 'ended'];
 const BATCH_MAX = 100;                            // keep in step with routes/devices.js (config)
 const MAX_AGE_SECONDS = 30 * 24 * 3600;           // events older than 30 days are rejected
 const MAX_FUTURE_SECONDS = 5 * 60;                // clock skew allowance
@@ -17,7 +19,7 @@ const MAX_FUTURE_SECONDS = 5 * 60;                // clock skew allowance
 // Check one event's fields. Returns { error } or { value } (cleaned values ready for SQL).
 function checkEvent(e) {
   if (!e || typeof e !== 'object') return { error: 'event must be an object' };
-  if (!DECISIONS.includes(e.decision)) return { error: "decision must be 'granted', 'denied', 'error' or 'already'" };
+  if (!DECISIONS.includes(e.decision)) return { error: "decision must be 'granted', 'denied', 'error', 'already' or 'ended'" };
   if (e.studentId !== undefined && e.studentId !== null && e.studentId !== '' && !isId(e.studentId)) {
     return { error: 'studentId must be a positive integer' };
   }
@@ -55,13 +57,20 @@ const toApi = (e) => ({ id: e.id, deviceId: e.device_id, studentId: e.student_id
 // from the same device returns the original event instead of creating a second row.
 async function insertEvent(deviceId, v) {
   const when = v.timestamp ? new Date(v.timestamp) : new Date(Date.now() - (v.secondsAgo ?? 0) * 1000);
-  // a student is let in once per exam session; seen again, they are recorded as already inside
-  const decision = v.decision === 'granted' && v.studentId && (await wasLetIn(prisma, v.studentId, when)) ? 'already' : v.decision;
+  // a student is let in once per exam session; seen again, they are recorded as already inside.
+  // After their session has ended (12:00 / 16:00) they are signed out and denied: 'ended'.
+  let decision = v.decision;
+  if (v.studentId && ['granted', 'denied', 'already'].includes(decision)) {
+    const seat = await seatSession(prisma, v.studentId, when);
+    if (seat?.ended) decision = 'ended';
+    else if (decision === 'granted' && (await wasLetIn(prisma, v.studentId, when))) decision = 'already';
+  }
   try {
     const e = await prisma.access_events.create({
       data: { device_id: deviceId, student_id: v.studentId, decision, event_time: when, client_event_id: v.clientEventId },
       select: EVENT_SELECT,
     });
+    if (decision === 'granted') signOutSoon();  // a back-dated entry may already be due a sign-out
     return { ...toApi(e), duplicate: false };
   } catch (err) {
     // the unique index on (device_id, client_event_id) says this upload was already stored
@@ -128,6 +137,7 @@ router.post('/batch', requireDevice, async (req, res) => {
 // GET /api/access-events — feed for the dashboard.
 // Optional ?from=&to= (ISO timestamps, from inclusive / to exclusive) and ?limit= (default 100, max 500).
 router.get('/', async (req, res) => {
+  await signOutIfDue(prisma);
   const { from, to } = req.query;
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
   for (const [k, v] of [['from', from], ['to', to]]) {
@@ -154,12 +164,14 @@ router.get('/', async (req, res) => {
 // GET /api/access-events/recognitions?limit=8 — the latest recognised students, newest first, for the
 // web console's "Recognised now" panel: who, at which device/hall, and their seat in the exam session
 // running when they were recognised (null when they have none then). decision 'already' = seen again
-// after being let in during that session.
+// after being let in during that session, 'ended' = their session was over. `status` for those let in:
+// 'inside' until the session ends, then 'signed_out' (with session.endsAt).
 router.get('/recognitions', async (req, res) => {
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 8, 1), 50);
+  await signOutIfDue(prisma);
   try {
     const events = await prisma.access_events.findMany({
-      where: { student_id: { not: null } },
+      where: { student_id: { not: null }, decision: { not: 'signed_out' } },
       select: {
         id: true, decision: true, event_time: true,
         devices: { select: { id: true, name: true, venues: { select: { id: true, name: true } } } },
@@ -182,7 +194,8 @@ router.get('/recognitions', async (req, res) => {
           id: e.students.id, studentNumber: e.students.student_number, name: e.students.name,
           course: e.students.course_name, hasPhoto: !!e.students.enrollment_image_type,
         },
-        session: { date, slot },
+        session: { date, slot, endsAt: sessionEnd({ date, slot }) },
+        status: ['granted', 'already'].includes(e.decision) ? (new Date() < sessionEnd({ date, slot }) ? 'inside' : 'signed_out') : null,
         seat: seat && {
           number: seat.seat_number, moduleCode: seat.exam_bookings.modules.code, moduleName: seat.exam_bookings.modules.name,
           venueName: seat.exam_bookings.venues.name, inThisVenue: seat.venue_id === e.devices.venues.id,

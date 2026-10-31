@@ -75,7 +75,8 @@ test('a student let in once is "already inside" when recognised again in the sam
   assert.strictEqual(latest.decision, 'already');
   // the door device learns who is already inside, so a restarted device still knows
   const session = (await call('GET', `/api/devices/${ctx.device.id}/session`, undefined, dkey())).json;
-  assert.ok(session.alreadyInside.includes(a.id) && session.alreadyInside.includes(b.id));
+  // (after 16:00 the session has ended and everyone is signed out: see signout.test.js)
+  if (!session.ended) assert.ok(session.alreadyInside.includes(a.id) && session.alreadyInside.includes(b.id));
   assert.ok(!session.alreadyInside.includes(ctx.students[2].id));
   // the next session (other slot) starts fresh: a past session's entry does not count
   const otherSlot = session.slot === '09:00' ? '13:00' : '09:00';

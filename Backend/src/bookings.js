@@ -6,6 +6,7 @@
 const { toDbDate } = require('./http');
 
 const SLOTS = ['09:00', '13:00'];
+const SESSION_ENDS = { '09:00': '12:00', '13:00': '16:00' };  // students are signed out automatically then
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 // The exam session at a moment: before 12:00 local time the 09:00 slot, from 12:00 the 13:00 slot
@@ -15,6 +16,32 @@ function sessionAt(when) {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23' })
     .formatToParts(when).reduce((o, p) => ({ ...o, [p.type]: p.value }), {});
   return { date: `${parts.year}-${parts.month}-${parts.day}`, slot: Number(parts.hour) < 12 ? SLOTS[0] : SLOTS[1] };
+}
+
+// Minutes the time zone is ahead of UTC at `when` (e.g. 120 for Africa/Johannesburg).
+function zoneOffsetMinutes(when, tz) {
+  const p = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' })
+    .formatToParts(when).reduce((o, x) => ({ ...o, [x.type]: Number(x.value) }), {});
+  return (Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - Math.floor(when.getTime() / 1000) * 1000) / 60000;
+}
+
+// The moment a session ({ date, slot }) ends: 12:00 or 16:00 local time on its date.
+function sessionEnd({ date, slot }) {
+  const tz = process.env.EXAM_TIMEZONE || 'Africa/Johannesburg';
+  const asUtc = new Date(`${date}T${SESSION_ENDS[slot]}:00Z`);
+  return new Date(asUtc.getTime() - zoneOffsetMinutes(asUtc, tz) * 60000);
+}
+
+// The session a student with a seat at `when` belongs to and whether it is over: the current session,
+// or (between 12:00 and 13:00) the morning one that has just ended. null when they have no seat.
+async function seatSession(db, studentId, when) {
+  const now = sessionAt(when);
+  const tries = now.slot === SLOTS[1] ? [now, { date: now.date, slot: SLOTS[0] }] : [now];
+  for (const s of tries) {
+    const seat = await db.seat_reservations.findFirst({ where: { student_id: studentId, exam_date: toDbDate(s.date), slot: s.slot }, select: { seat_number: true } });
+    if (seat) return { ...s, ended: when >= sessionEnd(s) };
+  }
+  return null;
 }
 
 // Error that the route layer turns into an HTTP response.
@@ -129,4 +156,4 @@ async function unenrol(tx, studentId, moduleId) {
 // Seating a whole module is many small queries, so allow longer than Prisma's 5 s default.
 const inTransaction = (prisma, fn) => prisma.$transaction(fn, { maxWait: 10000, timeout: 60000 });
 
-module.exports = { SLOTS, isValidDate, sessionAt, HttpError, lockSession, availability, assignSeats, failIfProblems, enrol, unenrol, inTransaction };
+module.exports = { SLOTS, SESSION_ENDS, isValidDate, sessionAt, sessionEnd, seatSession, HttpError, lockSession, availability, assignSeats, failIfProblems, enrol, unenrol, inTransaction };

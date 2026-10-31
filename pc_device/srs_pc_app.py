@@ -39,6 +39,7 @@ import sys
 import threading
 import time
 import tkinter as tk
+from datetime import datetime
 from collections import deque
 from pathlib import Path
 from tkinter import ttk
@@ -226,7 +227,9 @@ class Backend(threading.Thread):
                         self.pending = pending
                     last["pend"] = now
                 # refresh the session regularly, and straight away when the 09:00 / 13:00 slot changes
-                slot_now = "09:00" if time.localtime().tm_hour < 12 else "13:00"
+                # or a session ends (12:00 / 16:00: everyone is signed out)
+                hour = time.localtime().tm_hour
+                slot_now = ("09:00" if hour < 12 else "13:00", hour >= 16)
                 if now - last["session"] >= SESSION_REFRESH or slot_now != slot_seen:
                     session = self.client.session()
                     with self.lock:
@@ -288,6 +291,20 @@ def auto_camera(cameras):
     """Built-in laptop cameras are normally index 0 and a plugged-in USB webcam comes after it,
     so 'auto' takes the highest working index."""
     return cameras[-1][0] if cameras else None
+
+
+def session_over(session):
+    """True once the exam session has ended (12:00 / 16:00): everyone is signed out then."""
+    if session.get("ended"):
+        return True
+    if session.get("endsAt"):
+        try:
+            return time.time() >= datetime.fromisoformat(session["endsAt"].replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            pass
+    date, slot = session_key(session)
+    hour = time.localtime().tm_hour
+    return date == time.strftime("%Y-%m-%d") and ((slot == "09:00" and hour >= 12) or (slot == "13:00" and hour >= 16))
 
 
 def session_key(session):
@@ -434,8 +451,11 @@ class DoorEngine(threading.Thread):
         person = self.store.people.get(sid) if sid is not None else None
         # a student is let in once per exam session: who is in = let in here + what the server reports
         let_in = self.let_in.setdefault(session_key(session), set())
-        inside = sid is not None and (sid in let_in or sid in session.get("alreadyInside", []))
-        label = (f"{person['name']} · already inside" if inside else person["name"]) if person else "not recognised"
+        # after the session ends (12:00 / 16:00) everyone is signed out and not let in again
+        ended = sid is not None and (session_over(session) or sid in session.get("sessionEndedFor", []))
+        inside = sid is not None and not ended and (sid in let_in or sid in session.get("alreadyInside", []))
+        label = ((f"{person['name']} · session ended" if ended else f"{person['name']} · already inside" if inside else person["name"])
+                 if person else "not recognised")
         answer = sid if sid is not None else "unknown"
         cand, n = self.streak
         self.streak = (answer, n + 1) if cand == answer else (answer, 1)
@@ -450,12 +470,14 @@ class DoorEngine(threading.Thread):
             if self.unknown_logged:
                 return label
             self.unknown_logged = True
-        elif now - self.recent.get(sid, 0) < (ALREADY_REPEAT_SECONDS if inside else SAME_PERSON_COOLDOWN):
+        elif now - self.recent.get(sid, 0) < (ALREADY_REPEAT_SECONDS if inside or ended else SAME_PERSON_COOLDOWN):
             return label
         # every enrolled student is recognised and let through ONCE per session; the web console shows
         # whether they have a seat in the exam running now
         seat = {s["studentId"]: s for s in session.get("students", [])}.get(sid)
-        if person and inside:
+        if person and ended:
+            decision, text = "ended", f"SESSION ENDED  {person['name']}\n{person['studentNumber']} · signed out, not let in"
+        elif person and inside:
             decision, text = "already", f"ALREADY INSIDE  {person['name']}\n{person['studentNumber']} · let in earlier this session"
         elif person:
             where = f"seat {seat['seatNumber']} · {seat['moduleCode']}" if seat else "no exam seat in this session"
@@ -767,12 +789,13 @@ class DoorWindow:
             self.skip_btn.config(state="disabled")
 
         s = snap["session"]
-        key = (s.get("date"), s.get("slot"), tuple(x["studentId"] for x in s.get("students", [])))
+        key = (s.get("date"), s.get("slot"), session_over(s), tuple(x["studentId"] for x in s.get("students", [])))
         if key != self._session_key:
             self._session_key = key
             students = s.get("students", [])
             self.ses_title.config(text=f"{s.get('date') or '—'}  {s.get('slot') or ''}   ·   {len(students)} seated"
-                                  + ("" if students else "   (no exam booked in this venue now)"))
+                                  + ("   ·   ENDED, everyone signed out" if session_over(s)
+                                     else "" if students else "   (no exam booked in this venue now)"))
             self.seats.delete(*self.seats.get_children())
             for x in sorted(students, key=lambda x: x["seatNumber"]):
                 self.seats.insert("", "end", values=(x["seatNumber"], x["studentNumber"], x["name"], x["moduleCode"]))
