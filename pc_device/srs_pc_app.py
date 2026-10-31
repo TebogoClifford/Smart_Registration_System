@@ -118,6 +118,9 @@ def load_settings():
     p.add_argument("--serial", default=pick("serial_port", "SERIAL_PORT"), help="Arduino port, e.g. COM3")
     p.add_argument("--min-face", type=int, default=int(pick("min_face_px", "MIN_FACE_PX", "90")),
                    help="ignore faces narrower than this many pixels (= too far from the camera)")
+    p.add_argument("--ignore-sensor", action="store_true",
+                   default=str(pick("ignore_sensor", "IGNORE_SENSOR", "no")).lower() in ("yes", "true", "1", "on"),
+                   help="scan without the distance sensor: any face size, only recognised faces get an answer")
     p.add_argument("--check", action="store_true", help="test the backend connection and exit (no camera)")
     a = p.parse_args()
     if not a.device_id or not a.key:
@@ -364,7 +367,9 @@ class DoorEngine(threading.Thread):
         self.unknown_logged = False
         self.face_seen_at = 0.0
         self.skip_requested = False
+        self.photo_requested = False   # the window's Take photo button (enrolment without the size check)
         self.recognising = False       # the window's Start/Stop recognition button
+        self.ignore_sensor = bool(args.ignore_sensor)  # the window's "Scan without distance sensor" switch
         self.let_in = {}               # (date, slot) -> student ids let in here during that exam session
         self.history = deque(maxlen=50)  # (time, decision, who)
 
@@ -374,6 +379,15 @@ class DoorEngine(threading.Thread):
 
     def request_skip(self):
         self.skip_requested = True
+
+    def request_photo(self):
+        self.photo_requested = True
+
+    def set_ignore_sensor(self, on):
+        self.ignore_sensor = bool(on)
+        self.streak = (None, 0)
+        self.link.clear_gate()
+        log("distance sensor", "IGNORED: recognised faces of any size get an answer" if on else "in use again")
 
     def toggle_recognition(self):
         self.recognising = not self.recognising
@@ -399,6 +413,7 @@ class DoorEngine(threading.Thread):
                              seconds_left=max(0, int(ENROL_TIMEOUT - (time.time() - e["started"]))))
             return dict(frame=self.frame, camera=self.camera_index, cameras=list(self.cameras),
                         arduino=self.link.connected, gate_open=self._gate_open(), recognising=self.recognising,
+                        ignore_sensor=self.ignore_sensor,
                         fps=self.fps, face_px=self.face_px,
                         camera_error=self.camera_error, enrolling=enrol,
                         result=self.result if self.result and time.time() < self.result[2] else None,
@@ -428,14 +443,17 @@ class DoorEngine(threading.Thread):
         if self.skip_requested or time.time() - e["started"] > ENROL_TIMEOUT:
             self.skip_requested = False
             return self._finish_enrolment(False)
+        if self.photo_requested:  # Take photo: capture now, whatever the face size (sensor broken, student far away)
+            self.photo_requested = False
+            e["manual"] = True
         if len(faces) != 1:
             e["hint"] = "One person only, please look at the camera" if faces else "No face found: step in front of the camera"
             return
         face = faces[0]
-        if face[2] < self.args.min_face:
-            e["hint"] = "Come closer to the camera"
+        if face[2] < self.args.min_face and not e.get("manual"):
+            e["hint"] = "Come closer to the camera, or press Take photo"
             return
-        e["hint"] = "Hold still..."
+        e["hint"] = "Taking photos, hold still..." if e.get("manual") else "Hold still..."
         if time.time() - e["last"] >= ENROL_SAMPLE_GAP:
             e["samples"].append(self.engine.embed(frame, face))
             e["last"] = time.time()
@@ -445,8 +463,9 @@ class DoorEngine(threading.Thread):
 
     # -- Arduino distance gate
     def _gate_open(self):
-        """True while the Arduino says a student has held the right distance (always True without one)."""
-        return not self.link.connected or self.link.gate_open(GATE_SECONDS)
+        """True while the Arduino says a student has held the right distance (always True without one,
+        or while the sensor is switched off)."""
+        return self.ignore_sensor or not self.link.connected or self.link.gate_open(GATE_SECONDS)
 
     # -- door decisions
     def _decide(self, frame, faces, session):
@@ -455,7 +474,7 @@ class DoorEngine(threading.Thread):
         if not self._gate_open():
             self.streak = (None, 0)
             return "stand at the marker" if faces else None
-        if not faces or faces[0][2] < self.args.min_face:
+        if not faces or (faces[0][2] < self.args.min_face and not self.ignore_sensor):
             self.streak = (None, 0)
             if now - self.face_seen_at > UNKNOWN_GONE_SECONDS:
                 self.unknown_logged = False
@@ -473,6 +492,10 @@ class DoorEngine(threading.Thread):
         inside = sid is not None and not ended and (sid in let_in or sid in session.get("alreadyInside", []))
         label = ((f"{person['name']} · session ended" if ended else f"{person['name']} · already inside" if inside else person["name"])
                  if person else "not recognised")
+        if self.ignore_sensor and sid is None:
+            # without the distance check anyone passing by is in view: only a positive match gets an answer
+            self.streak = (None, 0)
+            return label
         answer = sid if sid is not None else "unknown"
         cand, n = self.streak
         self.streak = (answer, n + 1) if cand == answer else (answer, 1)
@@ -480,8 +503,9 @@ class DoorEngine(threading.Thread):
             return label
         self.streak = (None, 0)
         # With the Arduino every scan is a deliberate 1-second hold at the marker (and the student must
-        # step away before the next), so each one gets an answer. Without it, repeats are suppressed.
-        if self.link.connected:
+        # step away before the next), so each one gets an answer. Without it (or with the sensor
+        # switched off), repeats are suppressed.
+        if self.link.connected and not self.ignore_sensor:
             self.link.clear_gate()
         elif sid is None:
             if self.unknown_logged:
@@ -569,6 +593,7 @@ class DoorEngine(threading.Thread):
                 todo = [p for p in snap["pending"] if p["studentId"] not in self.handled]
                 if todo and not showing:
                     self.enrolling = {"student": todo[0], "started": time.time(), "samples": [], "last": 0, "frame": frame}
+                    self.photo_requested = False  # a press left over from an earlier enrolment does not count
                     log("enrolment requested:", todo[0]["studentNumber"], todo[0]["name"])
             if self.enrolling:
                 self._step_enrolment(frame, faces)
@@ -712,9 +737,14 @@ class DoorWindow:
         self.recog_btn = tk.Button(right, text="▶  Start recognition", command=self._toggle_recognition,
                                    bg=OK_BG, fg="white", activebackground=OK_BG, activeforeground="white",
                                    font=("Segoe UI Semibold", 11), relief="flat", cursor="hand2", pady=4)
-        self.recog_btn.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        self.recog_btn.grid(row=2, column=0, sticky="ew", pady=(0, 4))
+        # for a broken or misplaced distance sensor: scan any face size, answer recognised faces only
+        self.ignore_var = tk.BooleanVar(value=door.ignore_sensor)
+        tk.Checkbutton(right, text="Scan without distance sensor (recognised faces only)", variable=self.ignore_var,
+                       command=self._toggle_ignore_sensor, bg=BG, fg=INK, activebackground=BG, anchor="w",
+                       cursor="hand2").grid(row=3, column=0, sticky="w", pady=(0, 6))
         camrow = tk.Frame(right, bg=BG)
-        camrow.grid(row=3, column=0, sticky="ew")
+        camrow.grid(row=4, column=0, sticky="ew")
         tk.Label(camrow, text="Camera", bg=BG, fg=INK).pack(side="left")
         self.cam_pick = ttk.Combobox(camrow, state="readonly", width=22)
         self.cam_pick.pack(side="left", padx=8)
@@ -724,18 +754,21 @@ class DoorWindow:
 
         # enrolment, under the camera controls (keeps the window short)
         enr = ttk.LabelFrame(right, text="Enrolment", style="Panel.TLabelframe", padding=10)
-        enr.grid(row=4, column=0, sticky="ew", pady=(10, 0))
+        enr.grid(row=5, column=0, sticky="ew", pady=(10, 0))
         enr.columnconfigure(0, weight=1)
         self.enr_title = ttk.Label(enr, text="Waiting for the web console…", style="P.TLabel",
                                    font=("Segoe UI Semibold", 10), wraplength=VIDEO_W - 30)
-        self.enr_title.grid(row=0, column=0, columnspan=2, sticky="w")
+        self.enr_title.grid(row=0, column=0, columnspan=3, sticky="w")
         self.enr_hint = ttk.Label(enr, text="Start an enrolment on the web console's Enroll page.", style="Muted.TLabel",
                                   wraplength=VIDEO_W - 30)
-        self.enr_hint.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 6))
+        self.enr_hint.grid(row=1, column=0, columnspan=3, sticky="w", pady=(2, 6))
         self.enr_bar = ttk.Progressbar(enr, maximum=ENROL_SAMPLES, style="Enrol.Horizontal.TProgressbar")
         self.enr_bar.grid(row=2, column=0, sticky="ew")
+        # captures the photos now even when the face looks too small (distance sensor not working)
+        self.photo_btn = ttk.Button(enr, text="Take photo", command=door.request_photo, state="disabled")
+        self.photo_btn.grid(row=2, column=1, padx=(8, 0))
         self.skip_btn = ttk.Button(enr, text="Skip", command=door.request_skip, state="disabled")
-        self.skip_btn.grid(row=2, column=1, padx=(8, 0))
+        self.skip_btn.grid(row=2, column=2, padx=(4, 0))
         self._cams_shown = None
 
         self._photo = None
@@ -799,12 +832,14 @@ class DoorWindow:
             self.enr_title.config(text=f"Enrolling {e['name']} ({e['number']})")
             self.enr_hint.config(text=f"{e['hint'] or 'Look at the camera'}   ·   {e['seconds_left']} s left")
             self.enr_bar.config(value=e["samples"])
+            self.photo_btn.config(state="normal")
             self.skip_btn.config(state="normal")
         else:
             waiting = len(snap["pending"])
             self.enr_title.config(text=f"{waiting} enrolment(s) waiting" if waiting else "Waiting for the web console…")
             self.enr_hint.config(text="Start an enrolment on the web console's Enroll page.")
             self.enr_bar.config(value=0)
+            self.photo_btn.config(state="disabled")
             self.skip_btn.config(state="disabled")
 
         s = snap["session"]
@@ -908,10 +943,11 @@ class DoorWindow:
         if self.test_win is None or not self.test_win.winfo_exists():
             w = self.test_win = tk.Toplevel(self.root)
             w.title("Hardware test")
-            w.configure(bg=PANEL, padx=16, pady=14)
-            w.geometry("600x680")
+            w.configure(bg=PANEL, padx=12, pady=10)
+            w.minsize(440, 0)
+            w.resizable(False, False)  # the window keeps fitting its contents as hints and buttons come and go
             w.protocol("WM_DELETE_WINDOW", self._close_test)
-            tk.Label(w, text="Hardware test", bg=PANEL, fg=INK, font=("Segoe UI Semibold", 14)).pack(anchor="w")
+            tk.Label(w, text="Hardware test", bg=PANEL, fg=INK, font=("Segoe UI Semibold", 12)).pack(anchor="w")
             self.test_summary = tk.Label(w, text="", bg=PANEL, fg=MUTED, font=("Segoe UI", 10), anchor="w", justify="left")
             self.test_summary.pack(anchor="w", pady=(0, 8))
             self.test_rows = {}
@@ -920,11 +956,11 @@ class DoorWindow:
             box.columnconfigure(1, weight=1)
             from arduino_link import TEST_STEPS
             for r, (key, label, _) in enumerate(TEST_STEPS):
-                icon = tk.Label(box, text="·", bg=PANEL, font=("Segoe UI Semibold", 14), width=2)
+                icon = tk.Label(box, text="·", bg=PANEL, font=("Segoe UI Semibold", 12), width=2)
                 icon.grid(row=r * 3, column=0, sticky="nw")
                 name = tk.Label(box, text=label, bg=PANEL, fg=INK, font=("Segoe UI Semibold", 10), anchor="w")
                 name.grid(row=r * 3, column=1, sticky="w")
-                detail = tk.Label(box, text="", bg=PANEL, fg=MUTED, font=("Segoe UI", 9), anchor="w", justify="left", wraplength=500)
+                detail = tk.Label(box, text="", bg=PANEL, fg=MUTED, font=("Segoe UI", 9), anchor="w", justify="left", wraplength=390)
                 detail.grid(row=r * 3 + 1, column=1, sticky="w")
                 # what you see or hear is confirmed right in its own row (hidden until asked)
                 buttons = None
@@ -938,7 +974,7 @@ class DoorWindow:
                     ttk.Button(buttons, text=again, command=lambda c=cmd: self.link.send(c)).pack(side="left")
                     buttons.grid(row=r * 3 + 2, column=1, sticky="w", pady=(4, 2))
                     buttons.grid_remove()
-                tk.Frame(box, bg=PANEL, height=6).grid(row=r * 3 + 2, column=0)
+                tk.Frame(box, bg=PANEL, height=3).grid(row=r * 3 + 2, column=0)
                 self.test_rows[key] = (icon, detail, buttons)
             bottom = tk.Frame(w, bg=PANEL)
             bottom.pack(side="bottom", fill="x", pady=(10, 0))
@@ -991,6 +1027,11 @@ class DoorWindow:
         self.recog_btn.config(text="■  Stop recognition" if on else "▶  Start recognition",
                               bg=BAD_BG if on else OK_BG, activebackground=BAD_BG if on else OK_BG)
 
+    def _toggle_ignore_sensor(self):
+        on = self.ignore_var.get()
+        self.door.set_ignore_sensor(on)
+        save_setting("ignore_sensor", "yes" if on else "no")  # kept for the next start
+
     def _refresh_banner(self, st):
         r = st["result"]
         if r:
@@ -999,6 +1040,8 @@ class DoorWindow:
             self.banner.config(text=f"Enrolling {st['enrolling']['name']}", bg=WARN_BG, fg="white")
         elif not st["recognising"]:
             self.banner.config(text="Recognition is off\npress Start recognition to scan students", bg=IDLE_BG, fg=MUTED)
+        elif st["ignore_sensor"]:
+            self.banner.config(text="Scanning without the distance sensor\nrecognised faces get an answer", bg=IDLE_BG, fg=INK)
         elif st["arduino"] and not st["gate_open"]:
             self.banner.config(text="Stand at the marker and hold still for 1 second", bg=IDLE_BG, fg=INK)
         else:
