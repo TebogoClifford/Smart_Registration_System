@@ -54,6 +54,7 @@ except AttributeError:
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "device_client"))
 from srs_client import SrsClient, SrsError  # noqa: E402
+from arduino_link import ArduinoLink, available_ports, guess_arduino_port  # noqa: E402
 from face_engine import FaceEngine, FaceStore  # noqa: E402
 
 DATA = HERE / "data"
@@ -107,14 +108,19 @@ def load_settings():
     return a
 
 
-def save_camera_choice(index):
-    """Remember the picked camera in config.ini, changing only the 'camera =' line (comments survive)."""
+def save_setting(name, value):
+    """Remember a choice in config.ini, changing only the 'name =' line (comments survive)."""
     if not CONFIG_FILE.exists():
         return
     text = CONFIG_FILE.read_text(encoding="utf-8")
-    line = f"camera = {index}"
-    text = re.sub(r"(?m)^camera\s*=.*$", line, text) if re.search(r"(?m)^camera\s*=", text) else text.rstrip() + f"\n{line}\n"
+    line = f"{name} = {value}"
+    pattern = rf"(?m)^{re.escape(name)}\s*=.*$"
+    text = re.sub(pattern, line, text) if re.search(pattern, text) else text.rstrip() + f"\n{line}\n"
     CONFIG_FILE.write_text(text, encoding="utf-8")
+
+
+def save_camera_choice(index):
+    save_setting("camera", index)
 
 
 # ---------------------------------------------------------------- network worker
@@ -291,19 +297,6 @@ def session_key(session):
     return time.strftime("%Y-%m-%d"), ("09:00" if time.localtime().tm_hour < 12 else "13:00")
 
 
-def open_serial(port):
-    if not port:
-        return None
-    try:
-        import serial
-        link = serial.Serial(port, 9600, timeout=0)
-        log(f"Arduino on {port}")
-        return link
-    except Exception as err:  # the door program still works without the Arduino
-        log(f"cannot open Arduino on {port}: {err} (continuing without it)")
-        return None
-
-
 GREEN, RED, AMBER, WHITE = (60, 200, 60), (40, 40, 230), (0, 190, 255), (255, 255, 255)
 
 
@@ -312,16 +305,16 @@ class DoorEngine(threading.Thread):
     """Reads the camera, finds faces, runs enrolments and door decisions. The window only displays
     what this thread publishes (latest frame + state), so slow face maths never freezes the GUI."""
 
-    def __init__(self, args, backend, store, client):
+    def __init__(self, args, backend, store, client, link):
         super().__init__(daemon=True)
         self.args = args
         self.backend = backend
         self.store = store
         self.client = client
         self.engine = FaceEngine()
-        self.arduino = open_serial(args.serial)
-        self.serial_buf = b""
-        self.gate_at = 0.0             # when the Arduino last said READY (0 = nobody at the marker)
+        self.link = link               # the Arduino door unit (arduino_link.py); optional
+        self.fps = 0.0                 # camera frames per second (live value for the window)
+        self.face_px = None            # width of the biggest face in the picture, in pixels
         self.lock = threading.Lock()
         self.stop = threading.Event()
         self.cameras = []              # filled by rescan()
@@ -351,7 +344,7 @@ class DoorEngine(threading.Thread):
     def toggle_recognition(self):
         self.recognising = not self.recognising
         self.streak = (None, 0)
-        self.gate_at = 0.0
+        self.link.clear_gate()
         log("recognition mode", "ON" if self.recognising else "OFF")
         return self.recognising
 
@@ -371,7 +364,8 @@ class DoorEngine(threading.Thread):
                              samples=len(e["samples"]), hint=e.get("hint", ""),
                              seconds_left=max(0, int(ENROL_TIMEOUT - (time.time() - e["started"]))))
             return dict(frame=self.frame, camera=self.camera_index, cameras=list(self.cameras),
-                        arduino=bool(self.arduino), gate_open=self._gate_open(), recognising=self.recognising,
+                        arduino=self.link.connected, gate_open=self._gate_open(), recognising=self.recognising,
+                        fps=self.fps, face_px=self.face_px,
                         camera_error=self.camera_error, enrolling=enrol,
                         result=self.result if self.result and time.time() < self.result[2] else None,
                         faces_stored=len(self.store.people), history=list(self.history))
@@ -418,27 +412,7 @@ class DoorEngine(threading.Thread):
     # -- Arduino distance gate
     def _gate_open(self):
         """True while the Arduino says a student has held the right distance (always True without one)."""
-        return not self.arduino or time.time() - self.gate_at < GATE_SECONDS
-
-    def _read_arduino(self):
-        if not self.arduino:
-            return
-        try:
-            self.serial_buf += self.arduino.read(256)
-        except Exception as err:
-            log("Arduino read failed:", err, "(continuing without it)")
-            self.arduino = None
-            return
-        *lines, self.serial_buf = self.serial_buf.split(b"\n")
-        for raw in lines:
-            msg = raw.strip().decode("ascii", "ignore")
-            if msg == "READY":
-                self.gate_at = time.time()
-                self.streak = (None, 0)
-            elif msg == "AWAY":
-                self.gate_at = 0.0
-            elif msg == "HELLO":
-                log("Arduino door unit connected")
+        return not self.link.connected or self.link.gate_open(GATE_SECONDS)
 
     # -- door decisions
     def _decide(self, frame, faces, session):
@@ -470,8 +444,8 @@ class DoorEngine(threading.Thread):
         self.streak = (None, 0)
         # With the Arduino every scan is a deliberate 1-second hold at the marker (and the student must
         # step away before the next), so each one gets an answer. Without it, repeats are suppressed.
-        if self.arduino:
-            self.gate_at = 0.0
+        if self.link.connected:
+            self.link.clear_gate()
         elif sid is None:
             if self.unknown_logged:
                 return label
@@ -492,11 +466,8 @@ class DoorEngine(threading.Thread):
         if sid is not None:
             self.recent[sid] = now
         self.backend.record(decision, sid)
-        if self.arduino:
-            try:
-                self.arduino.write({"granted": b"G\n", "already": b"A\n"}.get(decision, b"D\n"))
-            except Exception as err:
-                log("Arduino write failed:", err)
+        if self.link.connected:
+            self.link.send({"granted": "G", "already": "A"}.get(decision, "D"))
         self.result = (decision, text, now + SHOW_RESULT_SECONDS)
         who = f"{person['studentNumber']} {person['name']}" if person else "unknown face"
         self.history.appendleft((time.strftime("%H:%M:%S"), decision, who))
@@ -528,6 +499,7 @@ class DoorEngine(threading.Thread):
             with self.lock:
                 self.camera_error = "No camera found. Plug in the webcam and press Rescan."
         cam = self._switch(None, start) if start is not None else None
+        last_frame = 0.0
         while not self.stop.is_set():
             if self.want_camera is not None:
                 cam = self._switch(cam, self.want_camera)
@@ -542,8 +514,12 @@ class DoorEngine(threading.Thread):
                 cam.release()
                 cam = None
                 continue
-            self._read_arduino()
+            now = time.time()
+            if last_frame:
+                self.fps = 0.9 * self.fps + 0.1 / max(1e-3, now - last_frame)  # smoothed frames per second
+            last_frame = now
             faces = self.engine.detect(frame)
+            self.face_px = int(faces[0][2]) if len(faces) else None
             snap = self.backend.snapshot()
             self.handled &= {p["studentId"] for p in snap["pending"]}  # forget once the server agrees
             showing = self.result and time.time() < self.result[2]
@@ -571,8 +547,6 @@ class DoorEngine(threading.Thread):
                 self.frame = view
         if cam is not None:
             cam.release()
-        if self.arduino:
-            self.arduino.close()
 
 
 # ---------------------------------------------------------------- window
@@ -581,13 +555,13 @@ OK_BG, BAD_BG, WARN_BG, IDLE_BG = "#16a34a", "#dc2626", "#d97706", "#e5e7eb"
 
 
 class DoorWindow:
-    def __init__(self, args, door, backend):
-        self.args, self.door, self.backend = args, door, backend
+    def __init__(self, args, door, backend, link):
+        self.args, self.door, self.backend, self.link = args, door, backend, link
         self.root = root = tk.Tk()
         root.title("SRS Door")
         root.configure(bg=BG)
-        root.geometry("880x660")   # the layout needs about 830x650; resize freely
-        root.minsize(820, 620)
+        root.geometry("900x780")   # the layout needs about 860x760; resize freely
+        root.minsize(840, 700)
         style = ttk.Style(root)
         style.theme_use("clam")
         style.configure(".", background=BG, foreground=INK, font=("Segoe UI", 10))
@@ -623,11 +597,34 @@ class DoorWindow:
         dev.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         dev.columnconfigure(1, weight=1)
         self.dev_vals = {}
-        for r, key in enumerate(["Server", "Device", "Venue", "Last contact", "Faces on this PC", "Queued events"]):
+        for r, key in enumerate(["Server", "Device", "Venue", "Last contact", "Faces on this PC", "Queued events", "Camera"]):
             ttk.Label(dev, text=key, style="Muted.TLabel").grid(row=r, column=0, sticky="w", padx=(0, 12))
             v = ttk.Label(dev, text="—", style="P.TLabel")
             v.grid(row=r, column=1, sticky="w")
             self.dev_vals[key] = v
+
+        # the Arduino door unit: live values, port, Connect, and the hardware test
+        hw = ttk.LabelFrame(left, text="Hardware (Arduino door unit)", style="Panel.TLabelframe", padding=10)
+        hw.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        hw.columnconfigure(1, weight=1)
+        self.hw_vals = {}
+        for r, key in enumerate(["Arduino", "Distance", "Door unit", "LCD", "Last message"]):
+            ttk.Label(hw, text=key, style="Muted.TLabel").grid(row=r, column=0, sticky="w", padx=(0, 12))
+            v = tk.Label(hw, text="—", bg=PANEL, fg=INK, font=("Segoe UI", 10), anchor="w")
+            v.grid(row=r, column=1, sticky="w")
+            self.hw_vals[key] = v
+        hwrow = tk.Frame(hw, bg=PANEL)
+        hwrow.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        self.port_pick = ttk.Combobox(hwrow, state="readonly", width=30)
+        self.port_pick.pack(side="left")
+        ttk.Button(hwrow, text="Ports", width=6, command=self._scan_ports).pack(side="left", padx=(4, 0))
+        self.connect_btn = ttk.Button(hwrow, text="Connect", command=self._connect_toggle)
+        self.connect_btn.pack(side="left", padx=4)
+        tk.Button(hwrow, text="Test hardware", command=self._open_test, bg=INK, fg="white", activebackground=INK,
+                  activeforeground="white", relief="flat", cursor="hand2", padx=10).pack(side="right")
+        self._ports = []
+        self._scan_ports()
+        self.test_win = None
 
         ses = ttk.LabelFrame(left, text="Exam session", style="Panel.TLabelframe", padding=10)
         ses.grid(row=2, column=0, sticky="nsew", pady=(0, 8))
@@ -636,7 +633,7 @@ class DoorWindow:
         self.ses_title = ttk.Label(ses, text="—", style="P.TLabel")
         self.ses_title.grid(row=0, column=0, sticky="w", pady=(0, 6))
         cols = ("seat", "number", "name", "module")
-        self.seats = ttk.Treeview(ses, columns=cols, show="headings", height=6)
+        self.seats = ttk.Treeview(ses, columns=cols, show="headings", height=4)
         for c, w in zip(cols, (50, 110, 200, 80)):
             self.seats.heading(c, text=c.capitalize())
             self.seats.column(c, width=w, anchor="w", stretch=c == "name")
@@ -647,7 +644,7 @@ class DoorWindow:
         act.grid(row=3, column=0, sticky="nsew")
         act.columnconfigure(0, weight=1)
         act.rowconfigure(0, weight=1)
-        self.log_box = tk.Listbox(act, font=("Consolas", 9), bg=PANEL, fg=INK, borderwidth=0, highlightthickness=0, activestyle="none", height=7)
+        self.log_box = tk.Listbox(act, font=("Consolas", 9), bg=PANEL, fg=INK, borderwidth=0, highlightthickness=0, activestyle="none", height=5)
         self.log_box.grid(row=0, column=0, sticky="nsew")
         sb = ttk.Scrollbar(act, command=self.log_box.yview)
         sb.grid(row=0, column=1, sticky="ns")
@@ -747,6 +744,9 @@ class DoorWindow:
         self.dev_vals["Last contact"].config(text=f"{int(time.time() - lc)} s ago" if lc else (snap["error"][:60] or "—"))
         self.dev_vals["Faces on this PC"].config(text=str(st["faces_stored"]))
         self.dev_vals["Queued events"].config(text=str(snap["queued"]))
+        face = f" · face {st['face_px']} px (min {self.args.min_face})" if st["face_px"] else " · no face in view"
+        self.dev_vals["Camera"].config(text=f"#{st['camera']} · {st['fps']:.0f} frames/s{face}" if st["camera"] is not None else "no camera")
+        self._refresh_hardware(self.link.status(), st)
 
         e = st["enrolling"]
         if e:
@@ -790,6 +790,146 @@ class DoorWindow:
                 self.log_box.insert("end", line)
             self._log_len = len(LOG)
 
+    # -- hardware (Arduino) panel
+    def _scan_ports(self):
+        self._ports = available_ports()
+        labels = [f"{port}  {desc}" for port, desc in self._ports]
+        self.port_pick.config(values=labels or ["no serial ports found"])
+        want = self.link.port or self.args.serial or guess_arduino_port()
+        idx = next((n for n, (port, _) in enumerate(self._ports) if port == want), 0 if self._ports else -1)
+        if idx >= 0:
+            self.port_pick.current(idx)
+        else:
+            self.port_pick.set("no serial ports found")
+
+    def _connect_toggle(self):
+        if self.link.connected:
+            self.link.disconnect()
+            save_setting("serial_port", "")          # stay without the Arduino next time too
+            return
+        n = self.port_pick.current()
+        if n < 0 or n >= len(self._ports):
+            log("Arduino: pick a port first (press Ports to look again)")
+            return
+        port = self._ports[n][0]
+        if self.link.connect(port):
+            save_setting("serial_port", port)        # connect to it again at the next start
+
+    def _refresh_hardware(self, hs, st):
+        def put(key, text, color=INK):
+            self.hw_vals[key].config(text=text, fg=color)
+        if not hs["connected"]:
+            put("Arduino", "not connected" + (f" ({hs['error']})" if hs["error"] else " (works without it)"), MUTED)
+            for k in ("Distance", "Door unit", "LCD"):
+                put(k, "—", MUTED)
+        else:
+            fw = f" · srs_door {hs['firmware']}" if hs["firmware"] else " · waiting for the door unit to start…"
+            put("Arduino", f"{hs['port']} · connected{fw}", OK_BG)
+            d = hs["distance"]
+            if not hs["live"]:
+                put("Distance", "no live readings (old firmware, or still starting)", WARN_BG)
+            elif d is None or d < 0:
+                put("Distance", "nothing in range (over ~4 m, or the sensor is not wired)", MUTED)
+            elif d < 20:
+                put("Distance", f"{d} cm · too close (20-40 cm)", WARN_BG)
+            elif d <= 40:
+                put("Distance", f"{d} cm · in range (20-40 cm)", OK_BG)
+            else:
+                put("Distance", f"{d} cm · too far (20-40 cm)", MUTED)
+            state = hs["unit_state"] or "—"
+            put("Door unit", f"{state}" + (" · picture allowed now" if hs["gate_open"] else ""), OK_BG if hs["gate_open"] else INK)
+            lcd = hs["lcd"]
+            put("LCD", "found at " + lcd if lcd and lcd != "NONE" else ("NOT FOUND - check SDA/SCL wiring" if lcd == "NONE" else "unknown (old firmware)"),
+                OK_BG if lcd and lcd != "NONE" else (BAD_BG if lcd == "NONE" else MUTED))
+        age = hs["last_line_age"]
+        put("Last message", f"{hs['last_line']} · {age:.0f} s ago" if hs["last_line"] and age is not None else "—", INK if hs["last_line"] else MUTED)
+        self.connect_btn.config(text="Disconnect" if hs["connected"] else "Connect")
+        if self.test_win is not None:
+            self._refresh_test(hs["test"])
+
+    # -- hardware test window
+    ICONS = {"pass": ("✔", OK_BG), "fail": ("✖", BAD_BG), "running": ("…", "#2563eb"), "ask": ("?", WARN_BG),
+             "pending": ("·", MUTED), "skipped": ("–", MUTED)}
+
+    def _open_test(self):
+        if self.test_win is None or not self.test_win.winfo_exists():
+            w = self.test_win = tk.Toplevel(self.root)
+            w.title("Hardware test")
+            w.configure(bg=PANEL, padx=16, pady=14)
+            w.geometry("560x560")
+            w.protocol("WM_DELETE_WINDOW", self._close_test)
+            tk.Label(w, text="Hardware test", bg=PANEL, fg=INK, font=("Segoe UI Semibold", 14)).pack(anchor="w")
+            self.test_summary = tk.Label(w, text="", bg=PANEL, fg=MUTED, font=("Segoe UI", 10), anchor="w", justify="left")
+            self.test_summary.pack(anchor="w", pady=(0, 8))
+            self.test_rows = {}
+            box = tk.Frame(w, bg=PANEL)
+            box.pack(fill="x")
+            from arduino_link import TEST_STEPS
+            for r, (key, label, _) in enumerate(TEST_STEPS):
+                icon = tk.Label(box, text="·", bg=PANEL, font=("Segoe UI Semibold", 14), width=2)
+                icon.grid(row=r * 2, column=0, sticky="nw")
+                name = tk.Label(box, text=label, bg=PANEL, fg=INK, font=("Segoe UI Semibold", 10), anchor="w")
+                name.grid(row=r * 2, column=1, sticky="w")
+                detail = tk.Label(box, text="", bg=PANEL, fg=MUTED, font=("Segoe UI", 9), anchor="w", justify="left", wraplength=470)
+                detail.grid(row=r * 2 + 1, column=1, sticky="w", pady=(0, 6))
+                self.test_rows[key] = (icon, detail)
+            self.test_q = tk.Frame(w, bg="#fffbeb", padx=10, pady=8, highlightbackground="#fcd34d", highlightthickness=1)
+            self.test_q_text = tk.Label(self.test_q, text="", bg="#fffbeb", fg=INK, font=("Segoe UI Semibold", 10), wraplength=480, justify="left")
+            self.test_q_text.pack(anchor="w")
+            self.test_q_btns = tk.Frame(self.test_q, bg="#fffbeb")
+            self.test_q_btns.pack(anchor="w", pady=(6, 0))
+            tk.Button(self.test_q_btns, text="Yes", width=8, bg=OK_BG, fg="white", relief="flat",
+                      command=lambda: self.link.answer_question(True)).pack(side="left")
+            tk.Button(self.test_q_btns, text="No", width=8, bg=BAD_BG, fg="white", relief="flat",
+                      command=lambda: self.link.answer_question(False)).pack(side="left", padx=6)
+            bottom = tk.Frame(w, bg=PANEL)
+            bottom.pack(side="bottom", fill="x", pady=(10, 0))
+            ttk.Button(bottom, text="Close", command=self._close_test).pack(side="right")
+            self.test_again = ttk.Button(bottom, text="Run again", command=self.link.start_test)
+            self.test_again.pack(side="right", padx=6)
+        else:
+            self.test_win.lift()
+        self.link.start_test()
+
+    def _close_test(self):
+        if self.link.test and self.link.test["running"]:
+            self.link.answer_question(False)   # unblock a question; the test ends by itself
+        if self.test_win is not None:
+            self.test_win.destroy()
+        self.test_win = None
+
+    def _refresh_test(self, test):
+        if not test or not self.test_win.winfo_exists():
+            return
+        for st in test["steps"]:
+            icon, detail = self.test_rows[st["key"]]
+            ch, color = self.ICONS.get(st["status"], ("·", MUTED))
+            icon.config(text=ch, fg=color)
+            text = st["detail"]
+            if st["status"] == "fail":
+                text = (text + "\n" if text else "") + "What to check: " + st["hint"]
+            detail.config(text=text, fg=BAD_BG if st["status"] == "fail" else MUTED)
+        q = test["question"]
+        if q:
+            self.test_q_text.config(text=q["text"])
+            if q.get("wait"):
+                self.test_q_btns.pack_forget()
+            elif not self.test_q_btns.winfo_ismapped():
+                self.test_q_btns.pack(anchor="w", pady=(6, 0))
+            if not self.test_q.winfo_ismapped():
+                self.test_q.pack(fill="x", pady=(6, 0))
+        elif self.test_q.winfo_ismapped():
+            self.test_q.pack_forget()
+        failed = [s["label"] for s in test["steps"] if s["status"] == "fail"]
+        if test["running"]:
+            self.test_summary.config(text="Testing… follow the questions below.", fg=MUTED)
+        elif failed:
+            self.test_summary.config(text=f"{len(failed)} problem(s) found: " + "; ".join(failed), fg=BAD_BG)
+        else:
+            done = sum(1 for s in test["steps"] if s["status"] == "pass")
+            self.test_summary.config(text=f"All {done} checks passed.", fg=OK_BG)
+        self.test_again.config(state="disabled" if test["running"] else "normal")
+
     def _toggle_recognition(self):
         on = self.door.toggle_recognition()
         self.recog_btn.config(text="■  Stop recognition" if on else "▶  Start recognition",
@@ -823,6 +963,7 @@ class DoorWindow:
 
     def close(self):
         self.door.stop.set()
+        self.link.stop.set()
         self.backend.stop.set()
         self.root.destroy()
 
@@ -831,11 +972,15 @@ def run_gui(args):
     store = FaceStore(DATA)
     client = SrsClient(args.url, args.device_id, args.key)
     backend = Backend(client, store)
-    door = DoorEngine(args, backend, store, client)
+    link = ArduinoLink(log=log)       # the Arduino door unit; the program works without it
+    link.start()
+    if args.serial:
+        link.connect(args.serial)
+    door = DoorEngine(args, backend, store, client, link)
     log(f"backend {args.url}; device #{args.device_id}")
     backend.start()   # waits out a sleeping Render server by itself (shows OFFLINE until it answers)
     door.start()
-    DoorWindow(args, door, backend).run()
+    DoorWindow(args, door, backend, link).run()
     door.join(timeout=3)
     log(f"stopped ({len(backend.events)} event(s) still queued; they upload next time)")
 
@@ -866,6 +1011,9 @@ def check(args):
     cams = list_cameras()
     log("cameras: " + (", ".join(f"#{i} {w}x{h}" for i, w, h in cams) or "none found")
         + (f"  (auto picks #{auto_camera(cams)})" if cams else ""))
+    ports = available_ports()
+    log("serial ports: " + (", ".join(f"{p} ({d})" for p, d in ports) or "none")
+        + (f"  (Arduino looks like {guess_arduino_port()})" if guess_arduino_port() else ""))
     log("Everything is ready.")
 
 

@@ -32,7 +32,7 @@ Options (or in `config.ini`): `--url`, `--device-id`, `--key`, `--camera 0` (def
 
 ## Arduino door unit (optional): distance sensor, LCD and buzzer
 
-`arduino/srs_door/srs_door.ino` runs on an Arduino Uno or Nano. The student must stand 20–40 cm
+`arduino/srs_door/srs_door.ino` (version 2) runs on an Arduino Mega, Uno or Nano. The student must stand 20–40 cm
 from the sensor and hold still for **1 second**; only then does the Arduino beep and tell this
 program to take the picture. The answer appears on the LCD with a beep (two rising tones = granted,
 one long low tone = denied). The student must step away before the next scan.
@@ -40,18 +40,31 @@ one long low tone = denied). The student must step away before the next scan.
 | Part | Pin |
 |---|---|
 | HC-SR04 ultrasonic | VCC 5V, GND, TRIG D9, ECHO D10 |
-| 16x2 LCD with I2C backpack | VCC 5V, GND, SDA A4, SCL A5 |
+| 16x2 LCD with I2C backpack | VCC 5V, GND, SDA pin 20, SCL pin 21 (Mega) · SDA A4, SCL A5 (Uno/Nano) |
 | Buzzer (passive) | + D8, − GND |
 
 1. In the Arduino IDE install the library **LiquidCrystal I2C** (Frank de Brabander).
-2. Open `arduino/srs_door/srs_door.ino`, pick your board and port, and upload.
-   Blank screen: turn the contrast screw on the LCD backpack, or change `LCD_ADDRESS` to `0x3F`.
+2. Open `arduino/srs_door/srs_door.ino`, pick your board (e.g. Arduino Mega or Mega 2560) and port, and upload.
+   The LCD is found by itself at 0x27 or 0x3F. Blank screen: turn the contrast screw on the backpack.
    Active buzzer (beeps by itself on 5V): set `PASSIVE_BUZZER` to `false`.
-3. Close the Arduino IDE's Serial Monitor (only one program can use the port), then put the port
-   in `config.ini`, e.g. `serial_port = COM3` (Device Manager → Ports shows the number).
+3. Close the Arduino IDE's Serial Monitor (only one program can use the port).
+4. In this program's **Hardware** panel pick the port (e.g. `COM20  Arduino Mega 2560`) and press
+   **Connect**. The choice is saved in `config.ini` (`serial_port`); **Disconnect** clears it.
+
+### Hardware panel and test
+The panel shows live: the port and sketch version, the **distance** (green when 20–40 cm), what the
+door unit is doing (WAITING / HOLDING / SCANNING / …, and when a picture is allowed), whether the
+**LCD** was found and at which address, and the Arduino's last message. The Device panel shows the
+camera's frames per second and the size of the face in view.
+
+**Test hardware** (any time) opens a window that checks, one by one, and marks each ✔ or ✖ with
+what to check when it fails:
+1. Arduino connected over USB · 2. door unit program answers (version 2) ·
+3. LCD found on the I2C bus · 4. LCD shows the test screen (you answer Yes/No) ·
+5. buzzer beeps (you answer) · 6. distance sensor gives readings · 7. it sees your hand at 20–40 cm.
 
 Without an Arduino the program scans any face big enough on camera, as before.
-Serial messages (9600 baud, one per line): Arduino → PC `READY` / `AWAY` / `HELLO`; PC → Arduino `G` / `D`.
+Serial messages (9600 baud, one per line) are listed at the top of `srs_door.ino`.
 
 ## Notes
 * Matching uses SFace cosine similarity with threshold 0.40 (`MATCH_THRESHOLD` in `face_engine.py`). Raise it if strangers are ever accepted, lower it if enrolled students are denied.
