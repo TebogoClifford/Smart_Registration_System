@@ -54,7 +54,7 @@ except AttributeError:
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "device_client"))
 from srs_client import SrsClient, SrsError  # noqa: E402
-from arduino_link import ArduinoLink, available_ports, guess_arduino_port  # noqa: E402
+from arduino_link import MAX_CM, MIN_CM, ArduinoLink, available_ports, guess_arduino_port  # noqa: E402
 from face_engine import FaceEngine, FaceStore  # noqa: E402
 
 DATA = HERE / "data"
@@ -608,7 +608,7 @@ class DoorWindow:
         hw.grid(row=1, column=0, sticky="ew", pady=(0, 8))
         hw.columnconfigure(1, weight=1)
         self.hw_vals = {}
-        for r, key in enumerate(["Arduino", "Distance", "Door unit", "LCD", "Last message"]):
+        for r, key in enumerate(["Arduino", "Distance", "Door unit", "LCD", "Buzzer", "Last message"]):
             ttk.Label(hw, text=key, style="Muted.TLabel").grid(row=r, column=0, sticky="w", padx=(0, 12))
             v = tk.Label(hw, text="—", bg=PANEL, fg=INK, font=("Segoe UI", 10), anchor="w")
             v.grid(row=r, column=1, sticky="w")
@@ -820,7 +820,7 @@ class DoorWindow:
             self.hw_vals[key].config(text=text, fg=color)
         if not hs["connected"]:
             put("Arduino", "not connected" + (f" ({hs['error']})" if hs["error"] else " (works without it)"), MUTED)
-            for k in ("Distance", "Door unit", "LCD"):
+            for k in ("Distance", "Door unit", "LCD", "Buzzer"):
                 put(k, "—", MUTED)
         else:
             fw = f" · srs_door {hs['firmware']}" if hs["firmware"] else " · waiting for the door unit to start…"
@@ -830,17 +830,19 @@ class DoorWindow:
                 put("Distance", "no live readings (old firmware, or still starting)", WARN_BG)
             elif d is None or d < 0:
                 put("Distance", "nothing in range (over ~4 m, or the sensor is not wired)", MUTED)
-            elif d < 20:
-                put("Distance", f"{d} cm · too close (20-40 cm)", WARN_BG)
-            elif d <= 40:
-                put("Distance", f"{d} cm · in range (20-40 cm)", OK_BG)
+            elif d < MIN_CM:
+                put("Distance", f"{d} cm · too close ({MIN_CM}-{MAX_CM} cm)", WARN_BG)
+            elif d <= MAX_CM:
+                put("Distance", f"{d} cm · in range ({MIN_CM}-{MAX_CM} cm)", OK_BG)
             else:
-                put("Distance", f"{d} cm · too far (20-40 cm)", MUTED)
+                put("Distance", f"{d} cm · too far ({MIN_CM}-{MAX_CM} cm)", MUTED)
             state = hs["unit_state"] or "—"
             put("Door unit", f"{state}" + (" · picture allowed now" if hs["gate_open"] else ""), OK_BG if hs["gate_open"] else INK)
             lcd = hs["lcd"]
             put("LCD", "found at " + lcd if lcd and lcd != "NONE" else ("NOT FOUND - check SDA/SCL wiring" if lcd == "NONE" else "unknown (old firmware)"),
                 OK_BG if lcd and lcd != "NONE" else (BAD_BG if lcd == "NONE" else MUTED))
+            put("Buzzer", f"set as {hs['buzzer']} · Test hardware tries both types" if hs["buzzer"] else "unknown (old firmware)",
+                INK if hs["buzzer"] else MUTED)
         age = hs["last_line_age"]
         put("Last message", f"{hs['last_line']} · {age:.0f} s ago" if hs["last_line"] and age is not None else "—", INK if hs["last_line"] else MUTED)
         self.connect_btn.config(text="Disconnect" if hs["connected"] else "Connect")
@@ -854,7 +856,7 @@ class DoorWindow:
     # steps you confirm yourself: (yes button, no button, repeat button, command that repeats it)
     CONFIRM = {
         "lcd_view": ("Yes, I can see it", "No, it's blank or wrong", "Show it again", "TL"),
-        "buzzer": ("Yes, I heard 3 beeps", "No, I heard nothing", "Beep again", "TB"),
+        "buzzer": ("Yes, I heard 3 beeps", "No, I heard nothing (try the other type)", "Beep again", "TB"),
     }
 
     def _open_test(self):

@@ -9,14 +9,16 @@
   Wiring
     HC-SR04  VCC -> 5V   GND -> GND   TRIG -> D9   ECHO -> D10
     LCD I2C  VCC -> 5V   GND -> GND   SDA  -> pin 20, SCL -> pin 21 (Mega)  /  SDA A4, SCL A5 (Uno, Nano)
-    Buzzer   +   -> D8   -   -> GND   (passive buzzer; for an active buzzer set PASSIVE_BUZZER false)
+    Buzzer   +   -> D8   -   -> GND   (passive or active: the PC's hardware test finds out which,
+                                       and the choice is kept in EEPROM)
 
   Library: "LiquidCrystal I2C" by Frank de Brabander (Arduino IDE > Tools > Manage Libraries).
   The LCD is found by itself at I2C address 0x27 or 0x3F. If it stays blank, turn the blue contrast
   screw on its back.
 
   Serial protocol with the PC app (9600 baud, one message per line)
-    Arduino -> PC   HELLO SRS-DOOR v2 LCD=0x27   at start-up (LCD=NONE when no LCD answers)
+    Arduino -> PC   HELLO SRS-DOOR v2 LCD=0x27 BUZ=P   at start-up (LCD=NONE when no LCD answers;
+                                     BUZ=P passive buzzer, BUZ=A active buzzer)
                     S <cm> <state>   4 times a second: distance (-1 = nothing) and what the unit is doing
                     READY            student held the right distance for 1 s: take the picture now
                     AWAY             student left before a decision arrived: cancel
@@ -27,22 +29,25 @@
                     TL               test the LCD: look for it on the I2C bus, show a test pattern
                                        -> T LCD OK 0x27   or   T LCD FAIL
                     TB               test the buzzer: three beeps  -> T BUZZER DONE
+                    BP / BA          the buzzer is passive / active (saved)  -> BUZ P / BUZ A
                     TS               test the distance sensor: 10 readings
                                        -> T SONAR OK <median cm> <good>/10   or   T SONAR FAIL 0/10
                     TX               end the test, back to normal
 */
 #include <Wire.h>
+#include <EEPROM.h>
 #include <LiquidCrystal_I2C.h>
 
 // ------------------------------------------------------------------ settings
 const uint8_t TRIG_PIN = 9;
 const uint8_t ECHO_PIN = 10;
 const uint8_t BUZZER_PIN = 8;
-const bool PASSIVE_BUZZER = true;
+const int BUZZER_EEPROM = 0;           // EEPROM byte holding the buzzer type ('P' or 'A')
+bool passiveBuzzer = true;            // passive: needs a tone; active: beeps by itself on 5V
 const uint8_t LCD_ADDRESSES[] = { 0x27, 0x3F };  // the two usual I2C backpack addresses
 
-const int MIN_CM = 20;                 // closer than this: "step back"
-const int MAX_CM = 40;                 // further than this: "come closer" (window centre 30 cm, as on the server)
+const int MIN_CM = 25;                 // closer than this: "step back"
+const int MAX_CM = 50;                 // further than this: "come closer"
 const int GONE_CM = MAX_CM + 15;       // after a result, the student must step beyond this before the next scan
 const unsigned long HOLD_MS = 1000;    // time in the window before the picture is taken
 const unsigned long GRACE_MS = 200;    // one stray echo shorter than this does not restart the hold
@@ -125,7 +130,7 @@ void show(const String &top, const String &bottom) {
 }
 
 void beep(unsigned int hz, unsigned int ms) {
-  if (PASSIVE_BUZZER) { tone(BUZZER_PIN, hz, ms); delay(ms); noTone(BUZZER_PIN); }
+  if (passiveBuzzer) { tone(BUZZER_PIN, hz, ms); delay(ms); noTone(BUZZER_PIN); }
   else { digitalWrite(BUZZER_PIN, HIGH); delay(ms); digitalWrite(BUZZER_PIN, LOW); }
 }
 
@@ -193,6 +198,13 @@ void testSonar() {
   Serial.println("T SONAR OK " + String(median) + " " + String(good) + "/10");
 }
 
+void setBuzzerType(bool passive) {
+  passiveBuzzer = passive;
+  EEPROM.update(BUZZER_EEPROM, passive ? 'P' : 'A');
+  digitalWrite(BUZZER_PIN, LOW);
+  Serial.println(passive ? "BUZ P" : "BUZ A");
+}
+
 void handleTestCommand(const String &cmd) {
   if (cmd == "TX") { enter(WAITING); line1 = line2 = ""; return; }
   if (state != TESTING) enter(TESTING);
@@ -207,13 +219,16 @@ void setup() {
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
   pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
+  passiveBuzzer = EEPROM.read(BUZZER_EEPROM) != 'A';  // a new board reads 0xFF: passive
   Serial.begin(9600);
   Wire.begin();
   setupLcd();
   show("Smart Register", "Starting...");
   beep(1800, 60);
   delay(800);
-  Serial.println(String("HELLO SRS-DOOR v2 LCD=") + (lcdAddress ? hex2(lcdAddress) : String("NONE")));
+  Serial.println(String("HELLO SRS-DOOR v2 LCD=") + (lcdAddress ? hex2(lcdAddress) : String("NONE"))
+                 + (passiveBuzzer ? " BUZ=P" : " BUZ=A"));
   enter(WAITING);
 }
 
@@ -222,6 +237,7 @@ void loop() {
   String cmd = readCommand();
   char decision = 0;
   if (cmd == "P") Serial.println("PONG v2");
+  else if (cmd == "BP" || cmd == "BA") setBuzzerType(cmd == "BP");
   else if (cmd.startsWith("T")) handleTestCommand(cmd);
   else if (cmd == "G" || cmd == "D" || cmd == "A") decision = cmd[0];
 

@@ -5,7 +5,7 @@ firmware) stay current even without a camera, and runs the hardware test step by
 The door program works without an Arduino; this only does something once a port is connected.
 
 Messages from the Arduino (9600 baud, one per line):
-  HELLO SRS-DOOR v2 LCD=0x27   S <cm> <state>   READY   AWAY   PONG v2   T ...  (see srs_door.ino)
+  HELLO SRS-DOOR v2 LCD=0x27 BUZ=P   S <cm> <state>   READY   AWAY   PONG v2   T ...  (see srs_door.ino)
 """
 import threading
 import time
@@ -36,6 +36,8 @@ def guess_arduino_port():
     return None
 
 
+MIN_CM, MAX_CM = 25, 50     # the distance window; same as MIN_CM / MAX_CM in srs_door.ino
+
 # The hardware test: (key, what is checked, what to do when it fails)
 TEST_STEPS = [
     ("link", "Arduino connected over USB",
@@ -47,11 +49,12 @@ TEST_STEPS = [
     ("lcd_view", "LCD shows the test screen",
      "Turn the small blue contrast screw on the back of the LCD until the text is visible. Check the backlight jumper is on."),
     ("buzzer", "Buzzer beeps",
-     "Check the buzzer: + (long leg) to pin 8, - to GND. If it only clicks or hums, it is an active buzzer: set PASSIVE_BUZZER to false in srs_door.ino and upload again."),
+     "Both buzzer types were tried. Check the wires: + (long leg, or the 'S'/'I/O' pin on a module) to pin 8, - to GND, "
+     "and VCC to 5V on a 3-pin module. Make sure the newest srs_door.ino is uploaded."),
     ("sonar", "Distance sensor gives readings",
      "Check the HC-SR04: VCC to 5V, GND to GND, TRIG to pin 9, ECHO to pin 10. Nothing should be right in front of it (or further than 4 m)."),
-    ("sonar_hand", "Distance sensor sees your hand at 20-40 cm",
-     "Hold a flat hand or a book 30 cm in front of the sensor, square to it. If readings jump around, check the TRIG/ECHO wires are not swapped."),
+    ("sonar_hand", f"Distance sensor sees your hand at {MIN_CM}-{MAX_CM} cm",
+     "Hold a flat hand or a book about 35 cm in front of the sensor, square to it. If readings jump around, check the TRIG/ECHO wires are not swapped."),
 ]
 
 
@@ -67,6 +70,7 @@ class ArduinoLink(threading.Thread):
         self.buf = b""
         self.firmware = None        # e.g. "v2" from HELLO / PONG
         self.lcd = None             # "0x27", "NONE" or None (unknown)
+        self.buzzer = None          # "passive", "active" or None (unknown)
         self.distance = None        # cm, -1 = nothing in range
         self.unit_state = None      # WAITING / HOLDING / SCANNING / RESULT / LEAVING / TESTING
         self.status_at = 0.0        # when the last "S" line arrived
@@ -170,6 +174,10 @@ class ArduinoLink(threading.Thread):
                 self.firmware = next((p for p in parts if p.startswith("v")), "v1")
                 lcd = next((p.split("=", 1)[1] for p in parts if p.startswith("LCD=")), None)
                 self.lcd = lcd
+                buz = next((p.split("=", 1)[1] for p in parts if p.startswith("BUZ=")), None)
+                self.buzzer = {"P": "passive", "A": "active"}.get(buz)
+            elif parts[0] == "BUZ" and len(parts) > 1:
+                self.buzzer = {"P": "passive", "A": "active"}.get(parts[1], self.buzzer)
             elif parts[0] == "PONG":
                 self.pong_at = now
                 self.firmware = parts[1] if len(parts) > 1 else self.firmware
@@ -190,7 +198,7 @@ class ArduinoLink(threading.Thread):
         with self.lock:
             live = self.connected and now - self.status_at < STATUS_STALE
             return dict(
-                connected=self.connected, port=self.port, error=self.error, firmware=self.firmware, lcd=self.lcd,
+                connected=self.connected, port=self.port, error=self.error, firmware=self.firmware, lcd=self.lcd, buzzer=self.buzzer,
                 live=live, distance=self.distance if live else None, unit_state=self.unit_state if live else None,
                 last_line=self.last_line, last_line_age=(now - self.last_line_at) if self.last_line_at else None,
                 gate_open=self.gate_open(6), test=None if self.test is None else {
@@ -278,13 +286,26 @@ class ArduinoLink(threading.Thread):
                 self._step("lcd_bus", "fail", "no device at 0x27 or 0x3F" if line else "no answer")
                 self._step("lcd_view", "skipped", "no LCD found")
             # 5. buzzer (cannot be measured: the person listens)
-            self._step("buzzer", "running", "3 beeps...")
-            self.send("TB")
-            if self._wait_line("T BUZZER", 6):
-                ok = self._ask("buzzer", "Did you hear 3 rising beeps?")
-                self._step("buzzer", "pass" if ok else "fail", "heard" if ok else "not heard")
+            #    A passive buzzer needs a tone and an active one a steady 5V, so when the person
+            #    hears nothing the other type is tried; the Arduino keeps the one that worked.
+            first = self.buzzer or "passive"
+            other = "active" if first == "passive" else "passive"
+            heard = None
+            for kind in (first, other):
+                self.send("BP" if kind == "passive" else "BA")
+                self._step("buzzer", "running", f"3 beeps as a {kind} buzzer...")
+                self.send("TB")
+                if not self._wait_line("T BUZZER", 6):
+                    break
+                if self._ask("buzzer", f"Did you hear 3 beeps? (trying it as a {kind} buzzer)"):
+                    heard = kind
+                    break
+            if heard:
+                self.buzzer = heard
+                self._step("buzzer", "pass", f"heard; works as a {heard} buzzer (saved on the Arduino)")
             else:
-                self._step("buzzer", "fail", "the Arduino did not finish the beeps")
+                self.send("BP" if first == "passive" else "BA")
+                self._step("buzzer", "fail", "not heard as a passive or an active buzzer")
             # 6. distance sensor readings
             self._step("sonar", "running", "10 readings...")
             self.send("TS")
@@ -296,12 +317,12 @@ class ArduinoLink(threading.Thread):
                 self._step("sonar", "fail", "no echo at all (0/10)" if line else "no answer")
             # 7. sees a hand at the right distance (uses the live readings)
             self.send("TX")
-            self.test["question"] = {"key": "sonar_hand", "text": "Hold your hand about 30 cm in front of the distance sensor (up to 15 s).", "wait": True}
-            self._step("sonar_hand", "running", "waiting for a reading of 20-40 cm...")
+            self.test["question"] = {"key": "sonar_hand", "text": "Hold your hand about 35 cm in front of the distance sensor (up to 15 s).", "wait": True}
+            self._step("sonar_hand", "running", f"waiting for a reading of {MIN_CM}-{MAX_CM} cm...")
             end, seen = time.time() + 15, None
             while time.time() < end and seen is None:
                 d = self.distance
-                if d is not None and 20 <= d <= 40:
+                if d is not None and MIN_CM <= d <= MAX_CM:
                     seen = d
                 time.sleep(0.1)
             self.test["question"] = None
