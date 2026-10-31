@@ -30,24 +30,20 @@ The window shows the camera top-right with the GRANTED / DENIED banner under it,
 
 Options (or in `config.ini`): `--url`, `--device-id`, `--key`, `--camera 0` (default `auto`), `--serial COM3` (the Arduino door unit, see below), `--min-face 90` (pixels; raise it to make people step closer).
 
-## Arduino door unit (optional): distance sensor, LCD and buzzer
+## Arduino door unit (optional): distance sensor and LCD
 
 `arduino/srs_door/srs_door.ino` (version 2) runs on an Arduino Mega, Uno or Nano. The student must stand 25–50 cm
-from the sensor and hold still for **1 second**; only then does the Arduino beep and tell this
-program to take the picture. The answer appears on the LCD with a beep (two rising tones = granted,
-one long low tone = denied). The student must step away before the next scan.
+from the sensor and hold still for **1 second**; only then does the Arduino tell this
+program to take the picture. The answer appears on the LCD. The student must step away before the next scan.
 
 | Part | Pin |
 |---|---|
 | HC-SR04 ultrasonic | VCC 5V, GND, TRIG D9, ECHO D10 |
 | 16x2 LCD with I2C backpack | VCC 5V, GND, SDA pin 20, SCL pin 21 (Mega) · SDA A4, SCL A5 (Uno/Nano) |
-| Buzzer (passive) | + D8, − GND |
 
 1. In the Arduino IDE install the library **LiquidCrystal I2C** (Frank de Brabander).
 2. Open `arduino/srs_door/srs_door.ino`, pick your board (e.g. Arduino Mega or Mega 2560) and port, and upload.
-   The LCD is found by itself at 0x27 or 0x3F. Blank screen: turn the contrast screw on the backpack.
-   Passive or active buzzer both work: **Test hardware** tries both and the Arduino remembers the one you heard.
-3. Close the Arduino IDE's Serial Monitor (only one program can use the port).
+   The LCD is found by itself at 0x27 or 0x3F. Blank screen: turn the contrast screw on the backpack.3. Close the Arduino IDE's Serial Monitor (only one program can use the port).
 4. In this program's **Hardware** panel pick the port (e.g. `COM20  Arduino Mega 2560`) and press
    **Connect**. The choice is saved in `config.ini` (`serial_port`); **Disconnect** clears it.
 
@@ -61,7 +57,7 @@ camera's frames per second and the size of the face in view.
 what to check when it fails:
 1. Arduino connected over USB · 2. door unit program answers (version 2) ·
 3. LCD found on the I2C bus · 4. LCD shows the test screen (you answer Yes/No) ·
-5. buzzer beeps (you answer; if not, it tries the other buzzer type) · 6. distance sensor gives readings · 7. it sees your hand at 25–50 cm.
+5. distance sensor gives readings · 6. it sees your hand at 25–50 cm.
 
 Without an Arduino the program scans any face big enough on camera, as before.
 Serial messages (9600 baud, one per line) are listed at the top of `srs_door.ino`.

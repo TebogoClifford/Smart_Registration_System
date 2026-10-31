@@ -14,7 +14,7 @@ It plays the ESP32-CAM's part (see Backend/DEVICE_API.md):
   * ARDUINO (optional) - with --serial COM3 (or serial_port in config.ini) the door unit in
              arduino/srs_door decides WHEN to take the picture: it sends READY once the student
              has stood at the right distance for 1 second (AWAY if they leave), and this program
-             answers 'G' (granted) or 'D' (denied) + newline for its LCD and buzzer.
+             answers 'G' (granted) or 'D' (denied) + newline for its LCD.
 
 The window shows the camera top-right and the program's state (connection, exam session and
 seat list, enrolment progress, activity log) beside it. Pick the camera from the list under the
@@ -639,7 +639,7 @@ class DoorWindow:
         # the Arduino door unit: live values, port, Connect, and the hardware test
         hw = ttk.LabelFrame(left, text="Hardware (Arduino door unit)", style="Panel.TLabelframe", padding=10)
         hw.grid(row=1, column=0, sticky="ew", pady=(0, 8))
-        self.hw_vals = value_grid(hw, [["Arduino", "Distance"], ["Door unit", "LCD"], ["Buzzer", "Last message"]])
+        self.hw_vals = value_grid(hw, [["Arduino", "Distance"], ["Door unit", "LCD"], ["Last message"]])
         hwrow = tk.Frame(hw, bg=PANEL)
         hwrow.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(8, 0))
         self.port_pick = ttk.Combobox(hwrow, state="readonly", width=30)
@@ -848,7 +848,7 @@ class DoorWindow:
             self.hw_vals[key].config(text=text, fg=color)
         if not hs["connected"]:
             put("Arduino", "not connected" + (f" ({hs['error']})" if hs["error"] else " (not needed)"), MUTED)
-            for k in ("Distance", "Door unit", "LCD", "Buzzer"):
+            for k in ("Distance", "Door unit", "LCD"):
                 put(k, "—", MUTED)
         else:
             fw = f" · {hs['firmware']}" if hs["firmware"] else " · starting…"
@@ -869,8 +869,6 @@ class DoorWindow:
             lcd = hs["lcd"]
             put("LCD", "found at " + lcd if lcd and lcd != "NONE" else ("NOT FOUND (check SDA/SCL)" if lcd == "NONE" else "unknown"),
                 OK_BG if lcd and lcd != "NONE" else (BAD_BG if lcd == "NONE" else MUTED))
-            put("Buzzer", hs["buzzer"] if hs["buzzer"] else "unknown",
-                INK if hs["buzzer"] else MUTED)
         age = hs["last_line_age"]
         put("Last message", f"{hs['last_line']} ({age:.0f} s)" if hs["last_line"] and age is not None else "—", INK if hs["last_line"] else MUTED)
         self.connect_btn.config(text="Disconnect" if hs["connected"] else "Connect")
@@ -884,7 +882,6 @@ class DoorWindow:
     # steps you confirm yourself: (yes button, no button, repeat button, command that repeats it)
     CONFIRM = {
         "lcd_view": ("Yes, I can see it", "No, it's blank or wrong", "Show it again", "TL"),
-        "buzzer": ("Yes, I heard 3 beeps", "No, I heard nothing (try the other type)", "Beep again", "TB"),
     }
 
     def _open_test(self):
