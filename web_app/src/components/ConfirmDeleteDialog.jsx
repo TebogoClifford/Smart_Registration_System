@@ -6,7 +6,7 @@ export default function ConfirmDeleteDialog({ itemName, onConfirm, label = 'Dele
 
   return (
     <>
-      <Button variant="destructive" onClick={() => setIsOpen(true)}>
+      <Button type="button" variant="destructive" onClick={() => setIsOpen(true)}>
         {label}
       </Button>
       {isOpen && (
@@ -15,8 +15,8 @@ export default function ConfirmDeleteDialog({ itemName, onConfirm, label = 'Dele
             <h3 className="text-lg font-bold mb-2">{title}</h3>
             <p className="text-muted-foreground mb-4">Are you sure you want to {label.toLowerCase()} {itemName}? This action cannot be undone.</p>
             <div className="flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => setIsOpen(false)}>Cancel</Button>
-              <Button variant="destructive" onClick={() => { onConfirm(); setIsOpen(false); }}>
+              <Button type="button" variant="ghost" onClick={() => setIsOpen(false)}>Cancel</Button>
+              <Button type="button" variant="destructive" onClick={() => { onConfirm(); setIsOpen(false); }}>
                 {label}
               </Button>
             </div>

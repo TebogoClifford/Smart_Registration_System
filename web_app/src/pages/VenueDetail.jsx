@@ -41,13 +41,20 @@ export default function VenueDetail() {
 
   useEffect(() => { load(); }, [load]);
 
-  const handleSave = async () => {
+  const [saving, setSaving] = useState(false);
+  const handleSave = async (e) => {
+    e.preventDefault();
+    const seats = Number(capacity);
+    if (!name.trim()) { toast.error('Enter the venue name'); return; }
+    if (!Number.isInteger(seats) || seats < 1) { toast.error('Enter the capacity: a whole number of seats, 1 or more'); return; }
+    setSaving(true);
     try {
-      await api.updateVenue(id, name, Number(capacity));
-      toast.success('Venue updated successfully');
-      load();
+      await api.updateVenue(id, name.trim(), seats);
+      toast.success(`${name.trim()} saved · ${seats} seats`);
+      navigate('/venues');
     } catch (err) {
       toast.error(err.message);
+      setSaving(false);
     }
   };
 
@@ -73,27 +80,27 @@ export default function VenueDetail() {
         <CardHeader>
           <CardTitle>Venue Details</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex gap-2">
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Venue Name"
-              aria-label="Venue name"
-              disabled={!isAdmin}
-            />
-            <Input
-              type="number" min="1" step="1" className="max-w-32" disabled={!isAdmin}
-              value={capacity}
-              onChange={(e) => setCapacity(e.target.value)}
-              placeholder="Seats"
-              aria-label="Capacity (seats)"
-            />
-            {isAdmin && <>
-              <Button onClick={handleSave}>Save Changes</Button>
-              <ConfirmDeleteDialog itemName="this venue" onConfirm={handleDelete} />
-            </>}
-          </div>
+        <CardContent>
+          <form onSubmit={handleSave} className="flex flex-col gap-4 sm:flex-row sm:items-end">
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <label htmlFor="venue-name" className="text-sm font-medium">Venue name</label>
+              <Input id="venue-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Exam Hall A" disabled={!isAdmin} />
+            </div>
+            <div className="space-y-1.5 sm:w-40">
+              <label htmlFor="venue-capacity" className="text-sm font-medium">Capacity (seats)</label>
+              <Input
+                id="venue-capacity" type="number" min="1" step="1" inputMode="numeric" disabled={!isAdmin}
+                value={capacity} onChange={(e) => setCapacity(e.target.value)} placeholder="e.g. 120"
+              />
+            </div>
+            {isAdmin && (
+              <div className="flex gap-2">
+                <Button type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save changes'}</Button>
+                <ConfirmDeleteDialog itemName="this venue" onConfirm={handleDelete} />
+              </div>
+            )}
+          </form>
+          {isAdmin && <p className="mt-2 text-xs text-muted-foreground">Capacity is the number of exam seats in this venue. Bookings can't seat more students than this.</p>}
         </CardContent>
       </Card>
 

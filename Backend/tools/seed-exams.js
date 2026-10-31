@@ -146,13 +146,18 @@ async function main() {
   // 6. exam bookings (modules that already have a booking are left alone)
   const modules = new Map((await must('modules', call('GET', '/api/modules'))).map((m) => [m.code, m]));
   for (const [day, slot, rank, codes] of TIMETABLE) {
-    const hall = halls[Math.min(rank, halls.length - 1)];
+    const first = halls[Math.min(rank, halls.length - 1)];
     for (const code of codes) {
       const m = modules.get(code);
       if (m.booking_count > 0) { console.log(`${code} is already booked.`); continue; }
-      const r = await call('POST', '/api/bookings', { moduleId: m.id, venueId: hall.id, date: weekday(day), slot });
+      // the planned hall first; if it is too small (its seat count was set by hand), the next biggest
+      let r, hall;
+      for (hall of [first, ...halls.filter((h) => h !== first)]) {
+        r = await call('POST', '/api/bookings', { moduleId: m.id, venueId: hall.id, date: weekday(day), slot });
+        if (r.status < 400 || !/enough seats/.test(r.json?.error ?? '')) break;
+      }
       console.log(r.status < 400
-        ? `Booked ${code} (${r.json.seats} seats) in ${hall.name} on ${weekday(day)} at ${slot}; ${r.json.remaining} of ${hall.capacity} seats left.`
+        ? `Booked ${code} (${r.json.seats} seats) in ${hall.name} on ${weekday(day)} at ${slot}; ${r.json.remaining} of ${r.json.venue_capacity} seats left.`
         : `Could not book ${code}: ${r.json?.error}`);
     }
   }

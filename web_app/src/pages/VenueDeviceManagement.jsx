@@ -168,9 +168,15 @@ export default function VenueDeviceManagement() {
             {isAdmin && <Card className="rounded-lg shadow-sm">
               <CardHeader><CardTitle className="text-base">Add a venue</CardTitle></CardHeader>
               <CardContent>
-                <form onSubmit={handleAddVenue} className="flex flex-col gap-3 sm:flex-row">
-                  <Input aria-label="Venue name" placeholder="Venue name (e.g. Hall A)" value={venueName} onChange={(event) => setVenueName(event.target.value)} required className="h-11 rounded-md" />
-                  <Input aria-label="Venue capacity (seats)" type="number" min="1" step="1" placeholder="Seats" value={venueCapacity} onChange={(event) => setVenueCapacity(event.target.value)} required className="h-11 rounded-md sm:max-w-32" />
+                <form onSubmit={handleAddVenue} className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                  <div className="min-w-0 flex-1 space-y-1.5">
+                    <label htmlFor="new-venue-name" className="text-sm font-medium">Venue name</label>
+                    <Input id="new-venue-name" placeholder="e.g. Exam Hall A" value={venueName} onChange={(event) => setVenueName(event.target.value)} required className="h-11 rounded-md" />
+                  </div>
+                  <div className="space-y-1.5 sm:w-36">
+                    <label htmlFor="new-venue-capacity" className="text-sm font-medium">Capacity (seats)</label>
+                    <Input id="new-venue-capacity" type="number" min="1" step="1" inputMode="numeric" placeholder="e.g. 120" value={venueCapacity} onChange={(event) => setVenueCapacity(event.target.value)} required className="h-11 rounded-md" />
+                  </div>
                   <Button type="submit" disabled={saving || !venueName.trim()} className="h-11 shrink-0 rounded-md"><Plus size={16} className="mr-2" /> Add venue</Button>
                 </form>
               </CardContent>
