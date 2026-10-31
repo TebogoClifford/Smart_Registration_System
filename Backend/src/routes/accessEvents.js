@@ -4,10 +4,12 @@ const prisma = require('../db');
 const { validateIdParam, isId, handleDbError, pgCode, toDbDate } = require('../http');
 const { requireDevice } = require('../deviceAuth');
 const { sessionAt } = require('../bookings');
+const { wasLetIn } = require('../inside');
 
 router.param('id', validateIdParam);
 
-const DECISIONS = ['granted', 'denied', 'error']; // 'error' = device could not capture/match
+// 'error' = device could not capture/match; 'already' = recognised again after being let in this session
+const DECISIONS = ['granted', 'denied', 'error', 'already'];
 const BATCH_MAX = 100;                            // keep in step with routes/devices.js (config)
 const MAX_AGE_SECONDS = 30 * 24 * 3600;           // events older than 30 days are rejected
 const MAX_FUTURE_SECONDS = 5 * 60;                // clock skew allowance
@@ -15,7 +17,7 @@ const MAX_FUTURE_SECONDS = 5 * 60;                // clock skew allowance
 // Check one event's fields. Returns { error } or { value } (cleaned values ready for SQL).
 function checkEvent(e) {
   if (!e || typeof e !== 'object') return { error: 'event must be an object' };
-  if (!DECISIONS.includes(e.decision)) return { error: "decision must be 'granted', 'denied' or 'error'" };
+  if (!DECISIONS.includes(e.decision)) return { error: "decision must be 'granted', 'denied', 'error' or 'already'" };
   if (e.studentId !== undefined && e.studentId !== null && e.studentId !== '' && !isId(e.studentId)) {
     return { error: 'studentId must be a positive integer' };
   }
@@ -53,9 +55,11 @@ const toApi = (e) => ({ id: e.id, deviceId: e.device_id, studentId: e.student_id
 // from the same device returns the original event instead of creating a second row.
 async function insertEvent(deviceId, v) {
   const when = v.timestamp ? new Date(v.timestamp) : new Date(Date.now() - (v.secondsAgo ?? 0) * 1000);
+  // a student is let in once per exam session; seen again, they are recorded as already inside
+  const decision = v.decision === 'granted' && v.studentId && (await wasLetIn(prisma, v.studentId, when)) ? 'already' : v.decision;
   try {
     const e = await prisma.access_events.create({
-      data: { device_id: deviceId, student_id: v.studentId, decision: v.decision, event_time: when, client_event_id: v.clientEventId },
+      data: { device_id: deviceId, student_id: v.studentId, decision, event_time: when, client_event_id: v.clientEventId },
       select: EVENT_SELECT,
     });
     return { ...toApi(e), duplicate: false };
@@ -149,7 +153,8 @@ router.get('/', async (req, res) => {
 
 // GET /api/access-events/recognitions?limit=8 — the latest recognised students, newest first, for the
 // web console's "Recognised now" panel: who, at which device/hall, and their seat in the exam session
-// running when they were recognised (null when they have none then).
+// running when they were recognised (null when they have none then). decision 'already' = seen again
+// after being let in during that session.
 router.get('/recognitions', async (req, res) => {
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 8, 1), 50);
   try {

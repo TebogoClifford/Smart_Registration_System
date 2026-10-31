@@ -68,6 +68,7 @@ SHOW_RESULT_SECONDS = 3
 SAME_PERSON_COOLDOWN = 15    # do not log the same student twice within this many seconds
 UNKNOWN_GONE_SECONDS = 2     # an unrecognised face is logged once, again only after it has left
 GATE_SECONDS = 6             # with an Arduino: how long a READY stays valid without a decision
+ALREADY_REPEAT_SECONDS = 60  # a student who is already inside is logged again at most this often
 SESSION_REFRESH = 120        # seconds
 ROSTER_REFRESH = 300
 VIDEO_W, VIDEO_H = 320, 240  # size of the video panel (display only: recognition uses the full camera picture)
@@ -283,6 +284,13 @@ def auto_camera(cameras):
     return cameras[-1][0] if cameras else None
 
 
+def session_key(session):
+    """(date, slot) of the exam session: the server's when known, else this PC's clock (offline)."""
+    if session.get("date") and session.get("slot"):
+        return session["date"], session["slot"]
+    return time.strftime("%Y-%m-%d"), ("09:00" if time.localtime().tm_hour < 12 else "13:00")
+
+
 def open_serial(port):
     if not port:
         return None
@@ -330,6 +338,7 @@ class DoorEngine(threading.Thread):
         self.face_seen_at = 0.0
         self.skip_requested = False
         self.recognising = False       # the window's Start/Stop recognition button
+        self.let_in = {}               # (date, slot) -> student ids let in here during that exam session
         self.history = deque(maxlen=50)  # (time, decision, who)
 
     # -- called from the window thread
@@ -449,7 +458,10 @@ class DoorEngine(threading.Thread):
         # "closest" to a seated student just because the real match was left out of the search
         sid, sim = self.store.best_match(self.engine.embed(frame, face))
         person = self.store.people.get(sid) if sid is not None else None
-        label = person["name"] if person else "not recognised"
+        # a student is let in once per exam session: who is in = let in here + what the server reports
+        let_in = self.let_in.setdefault(session_key(session), set())
+        inside = sid is not None and (sid in let_in or sid in session.get("alreadyInside", []))
+        label = (f"{person['name']} · already inside" if inside else person["name"]) if person else "not recognised"
         answer = sid if sid is not None else "unknown"
         cand, n = self.streak
         self.streak = (answer, n + 1) if cand == answer else (answer, 1)
@@ -464,14 +476,17 @@ class DoorEngine(threading.Thread):
             if self.unknown_logged:
                 return label
             self.unknown_logged = True
-        elif now - self.recent.get(sid, 0) < SAME_PERSON_COOLDOWN:
+        elif now - self.recent.get(sid, 0) < (ALREADY_REPEAT_SECONDS if inside else SAME_PERSON_COOLDOWN):
             return label
-        # every enrolled student is recognised and let through; the web console shows whether they
-        # have a seat in the exam running now
+        # every enrolled student is recognised and let through ONCE per session; the web console shows
+        # whether they have a seat in the exam running now
         seat = {s["studentId"]: s for s in session.get("students", [])}.get(sid)
-        if person:
+        if person and inside:
+            decision, text = "already", f"ALREADY INSIDE  {person['name']}\n{person['studentNumber']} · let in earlier this session"
+        elif person:
             where = f"seat {seat['seatNumber']} · {seat['moduleCode']}" if seat else "no exam seat in this session"
             decision, text = "granted", f"RECOGNISED  {person['name']}\n{person['studentNumber']} · {where}"
+            let_in.add(sid)
         else:
             decision, text = "denied", "NOT RECOGNISED\nface is not enrolled"
         if sid is not None:
@@ -479,7 +494,7 @@ class DoorEngine(threading.Thread):
         self.backend.record(decision, sid)
         if self.arduino:
             try:
-                self.arduino.write(b"G\n" if decision == "granted" else b"D\n")
+                self.arduino.write({"granted": b"G\n", "already": b"A\n"}.get(decision, b"D\n"))
             except Exception as err:
                 log("Arduino write failed:", err)
         self.result = (decision, text, now + SHOW_RESULT_SECONDS)
@@ -571,8 +586,8 @@ class DoorWindow:
         self.root = root = tk.Tk()
         root.title("SRS Door")
         root.configure(bg=BG)
-        root.geometry("1240x760")
-        root.minsize(1080, 680)
+        root.geometry("880x660")   # the layout needs about 830x650; resize freely
+        root.minsize(820, 620)
         style = ttk.Style(root)
         style.theme_use("clam")
         style.configure(".", background=BG, foreground=INK, font=("Segoe UI", 10))
@@ -614,18 +629,6 @@ class DoorWindow:
             v.grid(row=r, column=1, sticky="w")
             self.dev_vals[key] = v
 
-        enr = ttk.LabelFrame(left, text="Enrolment", style="Panel.TLabelframe", padding=10)
-        enr.grid(row=1, column=0, sticky="ew", pady=(0, 8))
-        enr.columnconfigure(0, weight=1)
-        self.enr_title = ttk.Label(enr, text="Waiting for the web console…", style="P.TLabel", font=("Segoe UI Semibold", 10))
-        self.enr_title.grid(row=0, column=0, sticky="w")
-        self.enr_hint = ttk.Label(enr, text="Start an enrolment on the web console's Enroll page.", style="Muted.TLabel")
-        self.enr_hint.grid(row=1, column=0, sticky="w", pady=(2, 6))
-        self.enr_bar = ttk.Progressbar(enr, maximum=ENROL_SAMPLES, style="Enrol.Horizontal.TProgressbar")
-        self.enr_bar.grid(row=2, column=0, sticky="ew")
-        self.skip_btn = ttk.Button(enr, text="Skip", command=door.request_skip, state="disabled")
-        self.skip_btn.grid(row=2, column=1, padx=(8, 0))
-
         ses = ttk.LabelFrame(left, text="Exam session", style="Panel.TLabelframe", padding=10)
         ses.grid(row=2, column=0, sticky="nsew", pady=(0, 8))
         ses.columnconfigure(0, weight=1)
@@ -644,7 +647,7 @@ class DoorWindow:
         act.grid(row=3, column=0, sticky="nsew")
         act.columnconfigure(0, weight=1)
         act.rowconfigure(0, weight=1)
-        self.log_box = tk.Listbox(act, font=("Consolas", 9), bg=PANEL, fg=INK, borderwidth=0, highlightthickness=0, activestyle="none")
+        self.log_box = tk.Listbox(act, font=("Consolas", 9), bg=PANEL, fg=INK, borderwidth=0, highlightthickness=0, activestyle="none", height=7)
         self.log_box.grid(row=0, column=0, sticky="nsew")
         sb = ttk.Scrollbar(act, command=self.log_box.yview)
         sb.grid(row=0, column=1, sticky="ns")
@@ -675,6 +678,21 @@ class DoorWindow:
         self.cam_pick.bind("<<ComboboxSelected>>", self._pick_camera)
         self.rescan_btn = ttk.Button(camrow, text="Rescan", command=self._rescan)
         self.rescan_btn.pack(side="left")
+
+        # enrolment, under the camera controls (keeps the window short)
+        enr = ttk.LabelFrame(right, text="Enrolment", style="Panel.TLabelframe", padding=10)
+        enr.grid(row=4, column=0, sticky="ew", pady=(10, 0))
+        enr.columnconfigure(0, weight=1)
+        self.enr_title = ttk.Label(enr, text="Waiting for the web console…", style="P.TLabel",
+                                   font=("Segoe UI Semibold", 10), wraplength=VIDEO_W - 30)
+        self.enr_title.grid(row=0, column=0, columnspan=2, sticky="w")
+        self.enr_hint = ttk.Label(enr, text="Start an enrolment on the web console's Enroll page.", style="Muted.TLabel",
+                                  wraplength=VIDEO_W - 30)
+        self.enr_hint.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 6))
+        self.enr_bar = ttk.Progressbar(enr, maximum=ENROL_SAMPLES, style="Enrol.Horizontal.TProgressbar")
+        self.enr_bar.grid(row=2, column=0, sticky="ew")
+        self.skip_btn = ttk.Button(enr, text="Skip", command=door.request_skip, state="disabled")
+        self.skip_btn.grid(row=2, column=1, padx=(8, 0))
         self._cams_shown = None
 
         self._photo = None
@@ -780,7 +798,7 @@ class DoorWindow:
     def _refresh_banner(self, st):
         r = st["result"]
         if r:
-            self.banner.config(text=r[1], bg=OK_BG if r[0] == "granted" else BAD_BG, fg="white")
+            self.banner.config(text=r[1], bg={"granted": OK_BG, "already": WARN_BG}.get(r[0], BAD_BG), fg="white")
         elif st["enrolling"]:
             self.banner.config(text=f"Enrolling {st['enrolling']['name']}", bg=WARN_BG, fg="white")
         elif not st["recognising"]:

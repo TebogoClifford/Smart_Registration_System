@@ -65,6 +65,25 @@ test('recognitions: latest recognised students with details, newest first', asyn
   assert.match(list[0].session.slot, /^(09|13):00$/);
 });
 
+test('a student let in once is "already inside" when recognised again in the same session', async () => {
+  const [a, b] = ctx.students; // both were let in by the recognitions test above
+  const again = await call('POST', '/api/access-events', { deviceId: ctx.device.id, decision: 'granted', studentId: a.id }, dkey());
+  assert.strictEqual(again.status, 201);
+  assert.strictEqual(again.json.decision, 'already');
+  const latest = (await call('GET', '/api/access-events/recognitions?limit=1')).json[0];
+  assert.strictEqual(latest.student.id, a.id);
+  assert.strictEqual(latest.decision, 'already');
+  // the door device learns who is already inside, so a restarted device still knows
+  const session = (await call('GET', `/api/devices/${ctx.device.id}/session`, undefined, dkey())).json;
+  assert.ok(session.alreadyInside.includes(a.id) && session.alreadyInside.includes(b.id));
+  assert.ok(!session.alreadyInside.includes(ctx.students[2].id));
+  // the next session (other slot) starts fresh: a past session's entry does not count
+  const otherSlot = session.slot === '09:00' ? '13:00' : '09:00';
+  const other = (await call('GET', `/api/devices/${ctx.device.id}/session?date=${session.date}&slot=${otherSlot}`, undefined, dkey())).json;
+  assert.ok(!other.alreadyInside.includes(a.id));
+  assert.ok((await call('GET', '/api/stats')).json.alreadyInside >= 1);
+});
+
 test('venue: capacity is required and must be a whole number 1..10000', async () => {
   for (const capacity of [undefined, 0, -3, 1.5, '20', 10001]) {
     assert.strictEqual((await call('POST', '/api/venues', { name: 'Bad', capacity })).status, 400, String(capacity));

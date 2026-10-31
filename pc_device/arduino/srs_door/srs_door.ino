@@ -20,6 +20,7 @@
                     HELLO   sent once at start-up
     PC -> Arduino   G       access granted
                     D       access denied
+                    A       already inside (let in earlier this exam session)
 */
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
@@ -108,13 +109,13 @@ String holdBar(unsigned long held) {
 
 String distanceText(int cm) { return cm < 0 ? String("---") : String(cm) + "cm"; }
 
-// Reads "G" / "D" lines from the PC. Returns 'G', 'D' or 0.
+// Reads "G" / "D" / "A" lines from the PC. Returns 'G', 'D', 'A' or 0.
 char readDecision() {
   while (Serial.available()) {
     char c = (char)Serial.read();
     if (c == '\n' || c == '\r') {
       incoming.trim();
-      char d = (incoming == "G" || incoming == "D") ? incoming[0] : 0;
+      char d = (incoming == "G" || incoming == "D" || incoming == "A") ? incoming[0] : 0;
       incoming = "";
       if (d) return d;
     } else if (incoming.length() < 16) {
@@ -174,6 +175,7 @@ void loop() {
     case SCANNING:
       if (decision == 'G') { show("ACCESS GRANTED", "Welcome, go in"); beepGranted(); enter(RESULT); break; }
       if (decision == 'D') { show("ACCESS DENIED", "See invigilator"); beepDenied(); enter(RESULT); break; }
+      if (decision == 'A') { show("ALREADY INSIDE", "Entry recorded"); beepNoAnswer(); enter(RESULT); break; }
       if (now - stateSince > ANSWER_MS) {
         Serial.println("AWAY");
         show("No answer", "Please try again");
@@ -188,7 +190,7 @@ void loop() {
       break;
 
     case RESULT:
-      if (decision == 'G' || decision == 'D') break;  // a late answer: keep showing the first one
+      if (decision) break;  // a late answer: keep showing the first one
       if (now - stateSince >= RESULT_MS) enter(LEAVING);
       break;
 

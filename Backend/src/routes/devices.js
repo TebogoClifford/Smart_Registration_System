@@ -6,6 +6,7 @@ const { validateIdParam, isId, handleDbError, isNotFound, liveStatus, toDbDate }
 const { requireDevice } = require('../deviceAuth');
 const auth = require('../auth');
 const { SLOTS, isValidDate, sessionAt } = require('../bookings');
+const { insideIds } = require('../inside');
 
 const BATCH_MAX = 100; // keep in step with routes/accessEvents.js
 
@@ -179,7 +180,9 @@ router.get('/:id/session', requireDevice, async (req, res) => {
       ...toDeviceStudent(s), seatNumber: seat_number, moduleCode: b.modules.code,
       onThisDevice: s.device_id === req.device.id && s.enrollment_status === 'enrolled',
     }));
-    res.json({ venueId: req.device.venue_id, date, slot, serverTime: new Date().toISOString(), students });
+    // students already let in during this session (at any door), so a restarted device still says "already inside"
+    const alreadyInside = await insideIds(prisma, { date, slot });
+    res.json({ venueId: req.device.venue_id, date, slot, serverTime: new Date().toISOString(), students, alreadyInside });
   } catch (err) {
     handleDbError(res, err);
   }

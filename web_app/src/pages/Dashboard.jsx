@@ -17,6 +17,10 @@ import {
 } from 'lucide-react';
 
 const EXAM_DAYS_AHEAD = 14;
+const DECISION_FILTERS = [
+  { value: 'all', label: 'All decisions' }, { value: 'granted', label: 'Granted' },
+  { value: 'denied', label: 'Denied' }, { value: 'already', label: 'Already inside' },
+];
 
 const normalizeEvent = (event) => ({
   ...event,
@@ -292,7 +296,7 @@ export default function Dashboard() {
       total: today.length,
       granted: today.filter((event) => String(event.decision).toLowerCase() === 'granted').length,
       denied: today.filter((event) => String(event.decision).toLowerCase() === 'denied').length,
-      errors: today.filter((event) => !['granted', 'denied'].includes(String(event.decision).toLowerCase())).length,
+      errors: today.filter((event) => !['granted', 'denied', 'already'].includes(String(event.decision).toLowerCase())).length,
     };
   }, [events]);
 
@@ -332,6 +336,7 @@ export default function Dashboard() {
     const value = String(decision || 'Review');
     if (value.toLowerCase() === 'granted') return <Badge className="border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-50">●&nbsp; Granted</Badge>;
     if (value.toLowerCase() === 'denied') return <Badge className="border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-50">●&nbsp; Denied</Badge>;
+    if (value.toLowerCase() === 'already') return <Badge className="border border-sky-200 bg-sky-50 text-sky-700 hover:bg-sky-50">●&nbsp; Already inside</Badge>;
     return <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-700">{value}</Badge>;
   };
 
@@ -371,7 +376,7 @@ export default function Dashboard() {
 
       <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4" aria-label="Today's registration and access metrics">
         <StatCard label="Access attempts" value={todayStats.total.toLocaleString()} detail="Today · all recorded decisions" Icon={Activity} tone="blue" />
-        <StatCard label="Access granted" value={todayStats.granted.toLocaleString()} detail="Successful access checks" Icon={CheckCircle2} tone="green" />
+        <StatCard label="Access granted" value={todayStats.granted.toLocaleString()} detail={summary.alreadyInside ? `Students let in · ${Number(summary.alreadyInside).toLocaleString()} seen again (already inside)` : 'Students let in (once per exam session)'} Icon={CheckCircle2} tone="green" />
         <StatCard label="Access denied" value={todayStats.denied.toLocaleString()} detail="Denied access checks" Icon={XCircle} tone="red" />
         <StatCard label="Registered students" value={totalStudents === null ? '—' : totalStudents.toLocaleString()} detail={totalStudents === null ? 'Student directory total' : `${enrolled.toLocaleString()} enrolled · ${Math.max(0, totalStudents - enrolled).toLocaleString()} not yet enrolled`} Icon={Users} tone="violet"
           footer={totalStudents !== null && <><div className="mb-1.5 flex items-center justify-between text-[11px] text-slate-500"><span>Enrollment progress</span><span className="font-semibold text-slate-700">{enrollmentRate}%</span></div><div className="h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-violet-500 transition-all" style={{ width: `${Math.min(100, Math.max(0, enrollmentRate))}%` }} /></div></>} />
@@ -413,12 +418,13 @@ export default function Dashboard() {
               <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <Input aria-label="Search access events" placeholder="Search student, device, decision..." value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} className="h-10 rounded-md border-slate-200 pl-9" />
             </div>
-            <Select value={decisionFilter} onValueChange={setDecisionFilter}>
+            <Select value={decisionFilter} onValueChange={setDecisionFilter} items={DECISION_FILTERS}>
               <SelectTrigger className="h-10 rounded-md border-slate-200"><Filter size={15} className="mr-2 text-slate-400" /><SelectValue placeholder="All decisions" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All decisions</SelectItem>
                 <SelectItem value="granted">Granted</SelectItem>
                 <SelectItem value="denied">Denied</SelectItem>
+                <SelectItem value="already">Already inside</SelectItem>
               </SelectContent>
             </Select>
             <Input aria-label="Filter events by date" type="date" value={dateFilter} onChange={(event) => setDateFilter(event.target.value)} className="h-10 rounded-md border-slate-200" />
@@ -458,7 +464,7 @@ export default function Dashboard() {
                     <TableCell className="px-5 py-4 text-right">
                       {event.overridden
                         ? <Badge variant="outline">Overridden</Badge>
-                        : event.id != null && String(event.decision || '').toLowerCase() !== 'granted'
+                        : event.id != null && !['granted', 'already'].includes(String(event.decision || '').toLowerCase())
                           ? <Button variant="outline" size="sm" onClick={() => setOverrideFor(event)}>Override</Button>
                           : null}
                     </TableCell>

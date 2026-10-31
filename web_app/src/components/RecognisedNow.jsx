@@ -53,6 +53,8 @@ export default function RecognisedNow() {
   }, []);
 
   const fresh = latest && (now - new Date(latest.timestamp).getTime()) / 1000 < FRESH_SECONDS;
+  const repeat = latest?.decision === 'already'; // seen again after being let in this session
+  const boxTone = repeat ? 'border-sky-300 bg-sky-50/70' : fresh ? 'border-emerald-300 bg-emerald-50/60' : 'border-slate-200 bg-slate-50/60';
 
   return (
     <Card className="rounded-lg border-slate-200/80 shadow-sm">
@@ -74,7 +76,7 @@ export default function RecognisedNow() {
               </div>
             ) : (
               <div className="space-y-4">
-                <div aria-live="polite" className={`flex gap-4 rounded-lg border p-4 ${fresh ? 'border-emerald-300 bg-emerald-50/60' : 'border-slate-200 bg-slate-50/60'}`}>
+                <div aria-live="polite" className={`flex gap-4 rounded-lg border p-4 ${boxTone}`}>
                   <div className="size-24 shrink-0 overflow-hidden rounded-md bg-slate-200">
                     {photos[latest.student.id]
                       ? <img src={photos[latest.student.id]} alt={`Enrolment photo of ${latest.student.name}`} className="size-full object-cover" />
@@ -83,8 +85,10 @@ export default function RecognisedNow() {
                   <div className="min-w-0 space-y-1 text-sm">
                     <p className="flex flex-wrap items-center gap-2">
                       <span className="text-lg font-bold text-slate-900">{latest.student.name}</span>
-                      {fresh && <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[11px] font-semibold text-white">just now</span>}
+                      {repeat && <span className="rounded-full bg-sky-600 px-2 py-0.5 text-[11px] font-semibold text-white">Already inside</span>}
+                      {fresh && !repeat && <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[11px] font-semibold text-white">just now</span>}
                     </p>
+                    {repeat && <p className="text-xs font-medium text-sky-800">Let in earlier this session; this sighting is not a second entry.</p>}
                     <p className="font-mono text-xs text-slate-600">{latest.student.studentNumber}</p>
                     <p className="text-slate-600">{latest.student.course || 'Course not set'}</p>
                     <p className="flex items-center gap-1.5"><Armchair size={14} className="shrink-0 text-slate-400" /><SeatLine r={latest} /></p>
@@ -95,7 +99,10 @@ export default function RecognisedNow() {
                   <ul className="divide-y divide-slate-100 text-sm">
                     {list.slice(1).map((r) => (
                       <li key={r.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5 py-2">
-                        <span className="min-w-0"><span className="font-medium text-slate-800">{r.student.name}</span> <span className="font-mono text-xs text-slate-500">{r.student.studentNumber}</span></span>
+                        <span className="min-w-0">
+                          <span className="font-medium text-slate-800">{r.student.name}</span> <span className="font-mono text-xs text-slate-500">{r.student.studentNumber}</span>
+                          {r.decision === 'already' && <span className="ml-2 rounded-full bg-sky-100 px-1.5 py-0.5 text-[11px] font-semibold text-sky-800">Already inside</span>}
+                        </span>
                         <span className="text-xs text-slate-500">{r.seat ? `Seat ${r.seat.number} · ${r.seat.moduleCode}` : 'No seat'} · {r.device.name} · {ago(r.timestamp, now)}</span>
                       </li>
                     ))}

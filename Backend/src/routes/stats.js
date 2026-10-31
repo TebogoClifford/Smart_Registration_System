@@ -13,7 +13,8 @@ router.get('/', async (req, res) => {
           COUNT(*)::int AS total,
           COUNT(*) FILTER (WHERE decision = 'granted')::int AS granted,
           COUNT(*) FILTER (WHERE decision = 'denied')::int AS denied,
-          COUNT(*) FILTER (WHERE decision NOT IN ('granted', 'denied'))::int AS errors
+          COUNT(*) FILTER (WHERE decision = 'already')::int AS already,
+          COUNT(*) FILTER (WHERE decision NOT IN ('granted', 'denied', 'already'))::int AS errors
         FROM access_events
         WHERE event_time >= CURRENT_DATE
           AND event_time < CURRENT_DATE + INTERVAL '1 day'
@@ -74,6 +75,7 @@ router.get('/', async (req, res) => {
       granted: today.granted,
       denied: today.denied,
       errors: today.errors,
+      alreadyInside: today.already, // recognised again after being let in (not a second entry)
       enrolled: students.enrolled,
       pending: students.pending,
       totalStudents: students.total,
