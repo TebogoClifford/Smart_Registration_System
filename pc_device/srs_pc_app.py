@@ -554,6 +554,22 @@ BG, PANEL, INK, MUTED = "#f4f6f9", "#ffffff", "#1f2937", "#6b7280"
 OK_BG, BAD_BG, WARN_BG, IDLE_BG = "#16a34a", "#dc2626", "#d97706", "#e5e7eb"
 
 
+def value_grid(parent, rows):
+    """Label/value pairs, two per row; a row with one name spans the full width. Returns {name: value label}."""
+    for c in (1, 3):
+        parent.columnconfigure(c, weight=1, uniform="value")
+    vals = {}
+    for r, names in enumerate(rows):
+        for i, key in enumerate(names):
+            col = i * 2
+            ttk.Label(parent, text=key, style="Muted.TLabel").grid(row=r, column=col, sticky="nw", padx=(0 if col == 0 else 12, 8), pady=1)
+            v = tk.Label(parent, text="—", bg=PANEL, fg=INK, font=("Segoe UI", 10), anchor="w", justify="left",
+                         wraplength=440 if len(names) == 1 else 170)
+            v.grid(row=r, column=col + 1, columnspan=3 if len(names) == 1 else 1, sticky="ew", pady=1)
+            vals[key] = v
+    return vals
+
+
 class DoorWindow:
     def __init__(self, args, door, backend, link):
         self.args, self.door, self.backend, self.link = args, door, backend, link
@@ -595,26 +611,15 @@ class DoorWindow:
 
         dev = ttk.LabelFrame(left, text="Device", style="Panel.TLabelframe", padding=10)
         dev.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        dev.columnconfigure(1, weight=1)
-        self.dev_vals = {}
-        for r, key in enumerate(["Server", "Device", "Venue", "Last contact", "Faces on this PC", "Queued events", "Camera"]):
-            ttk.Label(dev, text=key, style="Muted.TLabel").grid(row=r, column=0, sticky="w", padx=(0, 12))
-            v = ttk.Label(dev, text="—", style="P.TLabel")
-            v.grid(row=r, column=1, sticky="w")
-            self.dev_vals[key] = v
+        self.dev_vals = value_grid(dev, [["Server"], ["Device", "Venue"], ["Last contact", "Faces on this PC"],
+                                         ["Queued events", "Camera"]])
 
         # the Arduino door unit: live values, port, Connect, and the hardware test
         hw = ttk.LabelFrame(left, text="Hardware (Arduino door unit)", style="Panel.TLabelframe", padding=10)
         hw.grid(row=1, column=0, sticky="ew", pady=(0, 8))
-        hw.columnconfigure(1, weight=1)
-        self.hw_vals = {}
-        for r, key in enumerate(["Arduino", "Distance", "Door unit", "LCD", "Buzzer", "Last message"]):
-            ttk.Label(hw, text=key, style="Muted.TLabel").grid(row=r, column=0, sticky="w", padx=(0, 12))
-            v = tk.Label(hw, text="—", bg=PANEL, fg=INK, font=("Segoe UI", 10), anchor="w")
-            v.grid(row=r, column=1, sticky="w")
-            self.hw_vals[key] = v
+        self.hw_vals = value_grid(hw, [["Arduino", "Distance"], ["Door unit", "LCD"], ["Buzzer", "Last message"]])
         hwrow = tk.Frame(hw, bg=PANEL)
-        hwrow.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        hwrow.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(8, 0))
         self.port_pick = ttk.Combobox(hwrow, state="readonly", width=30)
         self.port_pick.pack(side="left")
         ttk.Button(hwrow, text="Ports", width=6, command=self._scan_ports).pack(side="left", padx=(4, 0))
@@ -819,32 +824,32 @@ class DoorWindow:
         def put(key, text, color=INK):
             self.hw_vals[key].config(text=text, fg=color)
         if not hs["connected"]:
-            put("Arduino", "not connected" + (f" ({hs['error']})" if hs["error"] else " (works without it)"), MUTED)
+            put("Arduino", "not connected" + (f" ({hs['error']})" if hs["error"] else " (not needed)"), MUTED)
             for k in ("Distance", "Door unit", "LCD", "Buzzer"):
                 put(k, "—", MUTED)
         else:
-            fw = f" · srs_door {hs['firmware']}" if hs["firmware"] else " · waiting for the door unit to start…"
-            put("Arduino", f"{hs['port']} · connected{fw}", OK_BG)
+            fw = f" · {hs['firmware']}" if hs["firmware"] else " · starting…"
+            put("Arduino", f"{hs['port']}{fw}", OK_BG)
             d = hs["distance"]
             if not hs["live"]:
-                put("Distance", "no live readings (old firmware, or still starting)", WARN_BG)
+                put("Distance", "no readings (old firmware?)", WARN_BG)
             elif d is None or d < 0:
-                put("Distance", "nothing in range (over ~4 m, or the sensor is not wired)", MUTED)
+                put("Distance", "nothing in range", MUTED)
             elif d < MIN_CM:
-                put("Distance", f"{d} cm · too close ({MIN_CM}-{MAX_CM} cm)", WARN_BG)
+                put("Distance", f"{d} cm · too close", WARN_BG)
             elif d <= MAX_CM:
-                put("Distance", f"{d} cm · in range ({MIN_CM}-{MAX_CM} cm)", OK_BG)
+                put("Distance", f"{d} cm · in range", OK_BG)
             else:
-                put("Distance", f"{d} cm · too far ({MIN_CM}-{MAX_CM} cm)", MUTED)
+                put("Distance", f"{d} cm · too far", MUTED)
             state = hs["unit_state"] or "—"
-            put("Door unit", f"{state}" + (" · picture allowed now" if hs["gate_open"] else ""), OK_BG if hs["gate_open"] else INK)
+            put("Door unit", f"{state}" + (" · take picture" if hs["gate_open"] else ""), OK_BG if hs["gate_open"] else INK)
             lcd = hs["lcd"]
-            put("LCD", "found at " + lcd if lcd and lcd != "NONE" else ("NOT FOUND - check SDA/SCL wiring" if lcd == "NONE" else "unknown (old firmware)"),
+            put("LCD", "found at " + lcd if lcd and lcd != "NONE" else ("NOT FOUND (check SDA/SCL)" if lcd == "NONE" else "unknown"),
                 OK_BG if lcd and lcd != "NONE" else (BAD_BG if lcd == "NONE" else MUTED))
-            put("Buzzer", f"set as {hs['buzzer']} · Test hardware tries both types" if hs["buzzer"] else "unknown (old firmware)",
+            put("Buzzer", hs["buzzer"] if hs["buzzer"] else "unknown",
                 INK if hs["buzzer"] else MUTED)
         age = hs["last_line_age"]
-        put("Last message", f"{hs['last_line']} · {age:.0f} s ago" if hs["last_line"] and age is not None else "—", INK if hs["last_line"] else MUTED)
+        put("Last message", f"{hs['last_line']} ({age:.0f} s)" if hs["last_line"] and age is not None else "—", INK if hs["last_line"] else MUTED)
         self.connect_btn.config(text="Disconnect" if hs["connected"] else "Connect")
         if self.test_win is not None:
             self._refresh_test(hs["test"])
