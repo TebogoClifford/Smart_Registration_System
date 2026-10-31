@@ -851,12 +851,18 @@ class DoorWindow:
     ICONS = {"pass": ("✔", OK_BG), "fail": ("✖", BAD_BG), "running": ("…", "#2563eb"), "ask": ("?", WARN_BG),
              "pending": ("·", MUTED), "skipped": ("–", MUTED)}
 
+    # steps you confirm yourself: (yes button, no button, repeat button, command that repeats it)
+    CONFIRM = {
+        "lcd_view": ("Yes, I can see it", "No, it's blank or wrong", "Show it again", "TL"),
+        "buzzer": ("Yes, I heard 3 beeps", "No, I heard nothing", "Beep again", "TB"),
+    }
+
     def _open_test(self):
         if self.test_win is None or not self.test_win.winfo_exists():
             w = self.test_win = tk.Toplevel(self.root)
             w.title("Hardware test")
             w.configure(bg=PANEL, padx=16, pady=14)
-            w.geometry("560x560")
+            w.geometry("600x680")
             w.protocol("WM_DELETE_WINDOW", self._close_test)
             tk.Label(w, text="Hardware test", bg=PANEL, fg=INK, font=("Segoe UI Semibold", 14)).pack(anchor="w")
             self.test_summary = tk.Label(w, text="", bg=PANEL, fg=MUTED, font=("Segoe UI", 10), anchor="w", justify="left")
@@ -864,24 +870,29 @@ class DoorWindow:
             self.test_rows = {}
             box = tk.Frame(w, bg=PANEL)
             box.pack(fill="x")
+            box.columnconfigure(1, weight=1)
             from arduino_link import TEST_STEPS
             for r, (key, label, _) in enumerate(TEST_STEPS):
                 icon = tk.Label(box, text="·", bg=PANEL, font=("Segoe UI Semibold", 14), width=2)
-                icon.grid(row=r * 2, column=0, sticky="nw")
+                icon.grid(row=r * 3, column=0, sticky="nw")
                 name = tk.Label(box, text=label, bg=PANEL, fg=INK, font=("Segoe UI Semibold", 10), anchor="w")
-                name.grid(row=r * 2, column=1, sticky="w")
-                detail = tk.Label(box, text="", bg=PANEL, fg=MUTED, font=("Segoe UI", 9), anchor="w", justify="left", wraplength=470)
-                detail.grid(row=r * 2 + 1, column=1, sticky="w", pady=(0, 6))
-                self.test_rows[key] = (icon, detail)
-            self.test_q = tk.Frame(w, bg="#fffbeb", padx=10, pady=8, highlightbackground="#fcd34d", highlightthickness=1)
-            self.test_q_text = tk.Label(self.test_q, text="", bg="#fffbeb", fg=INK, font=("Segoe UI Semibold", 10), wraplength=480, justify="left")
-            self.test_q_text.pack(anchor="w")
-            self.test_q_btns = tk.Frame(self.test_q, bg="#fffbeb")
-            self.test_q_btns.pack(anchor="w", pady=(6, 0))
-            tk.Button(self.test_q_btns, text="Yes", width=8, bg=OK_BG, fg="white", relief="flat",
-                      command=lambda: self.link.answer_question(True)).pack(side="left")
-            tk.Button(self.test_q_btns, text="No", width=8, bg=BAD_BG, fg="white", relief="flat",
-                      command=lambda: self.link.answer_question(False)).pack(side="left", padx=6)
+                name.grid(row=r * 3, column=1, sticky="w")
+                detail = tk.Label(box, text="", bg=PANEL, fg=MUTED, font=("Segoe UI", 9), anchor="w", justify="left", wraplength=500)
+                detail.grid(row=r * 3 + 1, column=1, sticky="w")
+                # what you see or hear is confirmed right in its own row (hidden until asked)
+                buttons = None
+                if key in self.CONFIRM:
+                    yes, no, again, cmd = self.CONFIRM[key]
+                    buttons = tk.Frame(box, bg="#fffbeb", padx=8, pady=6, highlightbackground="#fcd34d", highlightthickness=1)
+                    tk.Button(buttons, text=yes, bg=OK_BG, fg="white", activebackground=OK_BG, relief="flat", padx=10, cursor="hand2",
+                              command=lambda: self.link.answer_question(True)).pack(side="left")
+                    tk.Button(buttons, text=no, bg=BAD_BG, fg="white", activebackground=BAD_BG, relief="flat", padx=10, cursor="hand2",
+                              command=lambda: self.link.answer_question(False)).pack(side="left", padx=6)
+                    ttk.Button(buttons, text=again, command=lambda c=cmd: self.link.send(c)).pack(side="left")
+                    buttons.grid(row=r * 3 + 2, column=1, sticky="w", pady=(4, 2))
+                    buttons.grid_remove()
+                tk.Frame(box, bg=PANEL, height=6).grid(row=r * 3 + 2, column=0)
+                self.test_rows[key] = (icon, detail, buttons)
             bottom = tk.Frame(w, bg=PANEL)
             bottom.pack(side="bottom", fill="x", pady=(10, 0))
             ttk.Button(bottom, text="Close", command=self._close_test).pack(side="right")
@@ -901,28 +912,26 @@ class DoorWindow:
     def _refresh_test(self, test):
         if not test or not self.test_win.winfo_exists():
             return
+        q = test["question"]
         for st in test["steps"]:
-            icon, detail = self.test_rows[st["key"]]
+            icon, detail, buttons = self.test_rows[st["key"]]
             ch, color = self.ICONS.get(st["status"], ("·", MUTED))
             icon.config(text=ch, fg=color)
-            text = st["detail"]
-            if st["status"] == "fail":
-                text = (text + "\n" if text else "") + "What to check: " + st["hint"]
-            detail.config(text=text, fg=BAD_BG if st["status"] == "fail" else MUTED)
-        q = test["question"]
-        if q:
-            self.test_q_text.config(text=q["text"])
-            if q.get("wait"):
-                self.test_q_btns.pack_forget()
-            elif not self.test_q_btns.winfo_ismapped():
-                self.test_q_btns.pack(anchor="w", pady=(6, 0))
-            if not self.test_q.winfo_ismapped():
-                self.test_q.pack(fill="x", pady=(6, 0))
-        elif self.test_q.winfo_ismapped():
-            self.test_q.pack_forget()
+            asking = q is not None and q["key"] == st["key"]
+            text, fg = st["detail"], MUTED
+            if asking:
+                text, fg = q["text"], INK          # the question, right where the buttons are
+            elif st["status"] == "fail":
+                text, fg = (text + "\n" if text else "") + "What to check: " + st["hint"], BAD_BG
+            detail.config(text=text, fg=fg, font=("Segoe UI Semibold", 10) if asking else ("Segoe UI", 9))
+            if buttons is not None:
+                if asking and not q.get("wait"):
+                    buttons.grid()
+                else:
+                    buttons.grid_remove()
         failed = [s["label"] for s in test["steps"] if s["status"] == "fail"]
         if test["running"]:
-            self.test_summary.config(text="Testing… follow the questions below.", fg=MUTED)
+            self.test_summary.config(text="Testing… answer in the yellow box when asked.", fg=MUTED)
         elif failed:
             self.test_summary.config(text=f"{len(failed)} problem(s) found: " + "; ".join(failed), fg=BAD_BG)
         else:
