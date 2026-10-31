@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -14,12 +15,14 @@ const SLOTS = [{ value: '09:00', label: '09:00 session' }, { value: '13:00', lab
 // Book an exam hall for a module. Every student enrolled in the module gets a seat reserved.
 // Several modules may share one hall in the same session as long as all the seats fit.
 export default function Bookings() {
+  const [searchParams] = useSearchParams();
   const [modules, setModules] = useState([]);
   const [venues, setVenues] = useState([]);
   const [bookings, setBookings] = useState([]);
   const [moduleId, setModuleId] = useState('');
   const [venueId, setVenueId] = useState('');
-  const [date, setDate] = useState('');
+  // ?date=YYYY-MM-DD comes from the exam calendar's "Book an exam on this day"
+  const [date, setDate] = useState(() => (/^\d{4}-\d{2}-\d{2}$/.test(searchParams.get('date') ?? '') ? searchParams.get('date') : ''));
   const [slot, setSlot] = useState('09:00');
   const [avail, setAvail] = useState(null);
   const [saving, setSaving] = useState(false);

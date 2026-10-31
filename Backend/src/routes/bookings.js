@@ -57,11 +57,17 @@ async function listBookings(where) {
   });
 }
 
-// GET /api/bookings?date=&venueId=&moduleId=
+// GET /api/bookings?date=&from=&to=&venueId=&moduleId=   (from/to: an inclusive date range, e.g. one calendar month)
 router.get('/', async (req, res) => {
-  const { date, venueId, moduleId } = req.query;
+  const { date, from, to, venueId, moduleId } = req.query;
   const where = {};
   if (date !== undefined) { if (!isValidDate(date)) return res.status(400).json({ error: 'date must be YYYY-MM-DD' }); where.exam_date = toDbDate(date); }
+  if (from !== undefined || to !== undefined) {
+    if (date !== undefined) return res.status(400).json({ error: 'use either date or from/to, not both' });
+    if ((from !== undefined && !isValidDate(from)) || (to !== undefined && !isValidDate(to))) return res.status(400).json({ error: 'from and to must be YYYY-MM-DD' });
+    if (from !== undefined && to !== undefined && from > to) return res.status(400).json({ error: 'from must not be after to' });
+    where.exam_date = { ...(from !== undefined && { gte: toDbDate(from) }), ...(to !== undefined && { lte: toDbDate(to) }) };
+  }
   if (venueId !== undefined) { if (!isId(venueId)) return res.status(400).json({ error: 'venueId must be a positive integer' }); where.venue_id = Number(venueId); }
   if (moduleId !== undefined) { if (!isId(moduleId)) return res.status(400).json({ error: 'moduleId must be a positive integer' }); where.module_id = Number(moduleId); }
   try {

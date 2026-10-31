@@ -9,7 +9,10 @@ It plays the ESP32-CAM's part (see Backend/DEVICE_API.md):
              Every decision is sent to the backend and appears on the dashboard.
   * OFFLINE - decisions are queued on disk (data/event_queue.json) and uploaded when the
              network is back; the server ignores duplicates.
-  * ARDUINO (optional) - with --serial COM3 it writes 'G' (granted) or 'D' (denied) + newline.
+  * ARDUINO (optional) - with --serial COM3 (or serial_port in config.ini) the door unit in
+             arduino/srs_door decides WHEN to take the picture: it sends READY once the student
+             has stood at the right distance for 1 second (AWAY if they leave), and this program
+             answers 'G' (granted) or 'D' (denied) + newline for its LCD and buzzer.
 
 The window shows the camera top-right and the program's state (connection, exam session and
 seat list, enrolment progress, activity log) beside it. Pick the camera from the list under the
@@ -62,6 +65,7 @@ VERIFY_CONFIRM = 3           # same answer this many frames in a row before deci
 SHOW_RESULT_SECONDS = 3
 SAME_PERSON_COOLDOWN = 15    # do not log the same student twice within this many seconds
 UNKNOWN_GONE_SECONDS = 2     # an unrecognised face is logged once, again only after it has left
+GATE_SECONDS = 6             # with an Arduino: how long a READY stays valid without a decision
 SESSION_REFRESH = 120        # seconds
 ROSTER_REFRESH = 300
 VIDEO_W, VIDEO_H = 640, 480  # size of the video panel
@@ -306,6 +310,8 @@ class DoorEngine(threading.Thread):
         self.client = client
         self.engine = FaceEngine()
         self.arduino = open_serial(args.serial)
+        self.serial_buf = b""
+        self.gate_at = 0.0             # when the Arduino last said READY (0 = nobody at the marker)
         self.lock = threading.Lock()
         self.stop = threading.Event()
         self.cameras = []              # filled by rescan()
@@ -346,6 +352,7 @@ class DoorEngine(threading.Thread):
                              samples=len(e["samples"]), hint=e.get("hint", ""),
                              seconds_left=max(0, int(ENROL_TIMEOUT - (time.time() - e["started"]))))
             return dict(frame=self.frame, camera=self.camera_index, cameras=list(self.cameras),
+                        arduino=bool(self.arduino), gate_open=self._gate_open(),
                         camera_error=self.camera_error, enrolling=enrol,
                         result=self.result if self.result and time.time() < self.result[2] else None,
                         faces_stored=len(self.store.people), history=list(self.history))
@@ -386,10 +393,38 @@ class DoorEngine(threading.Thread):
             if len(e["samples"]) >= ENROL_SAMPLES:
                 self._finish_enrolment(True)
 
+    # -- Arduino distance gate
+    def _gate_open(self):
+        """True while the Arduino says a student has held the right distance (always True without one)."""
+        return not self.arduino or time.time() - self.gate_at < GATE_SECONDS
+
+    def _read_arduino(self):
+        if not self.arduino:
+            return
+        try:
+            self.serial_buf += self.arduino.read(256)
+        except Exception as err:
+            log("Arduino read failed:", err, "(continuing without it)")
+            self.arduino = None
+            return
+        *lines, self.serial_buf = self.serial_buf.split(b"\n")
+        for raw in lines:
+            msg = raw.strip().decode("ascii", "ignore")
+            if msg == "READY":
+                self.gate_at = time.time()
+                self.streak = (None, 0)
+            elif msg == "AWAY":
+                self.gate_at = 0.0
+            elif msg == "HELLO":
+                log("Arduino door unit connected")
+
     # -- door decisions
     def _decide(self, frame, faces, session):
         """Returns the label to draw on the biggest face."""
         now = time.time()
+        if not self._gate_open():
+            self.streak = (None, 0)
+            return "stand at the marker" if faces else None
         if not faces or faces[0][2] < self.args.min_face:
             self.streak = (None, 0)
             if now - self.face_seen_at > UNKNOWN_GONE_SECONDS:
@@ -408,7 +443,11 @@ class DoorEngine(threading.Thread):
         if self.streak[1] < VERIFY_CONFIRM:
             return label
         self.streak = (None, 0)
-        if sid is None:
+        # With the Arduino every scan is a deliberate 1-second hold at the marker (and the student must
+        # step away before the next), so each one gets an answer. Without it, repeats are suppressed.
+        if self.arduino:
+            self.gate_at = 0.0
+        elif sid is None:
             if self.unknown_logged:
                 return label
             self.unknown_logged = True
@@ -475,6 +514,7 @@ class DoorEngine(threading.Thread):
                 cam.release()
                 cam = None
                 continue
+            self._read_arduino()
             faces = self.engine.detect(frame)
             snap = self.backend.snapshot()
             self.handled &= {p["studentId"] for p in snap["pending"]}  # forget once the server agrees
@@ -720,8 +760,10 @@ class DoorWindow:
             self.banner.config(text=r[1], bg=OK_BG if r[0] == "granted" else BAD_BG, fg="white")
         elif st["enrolling"]:
             self.banner.config(text=f"Enrolling {st['enrolling']['name']}", bg=WARN_BG, fg="white")
+        elif st["arduino"] and not st["gate_open"]:
+            self.banner.config(text="Stand at the marker and hold still for 1 second", bg=IDLE_BG, fg=INK)
         else:
-            self.banner.config(text="Ready · look at the camera", bg=IDLE_BG, fg=INK)
+            self.banner.config(text="Scanning · look at the camera" if st["arduino"] else "Ready · look at the camera", bg=IDLE_BG, fg=INK)
 
     def tick(self):
         st = self.door.state()

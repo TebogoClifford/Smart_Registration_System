@@ -13,6 +13,7 @@ import StudentDetail from './pages/StudentDetail';
 import Enroll from './pages/Enroll';
 import Modules from './pages/Modules';
 import Bookings from './pages/Bookings';
+import ExamCalendar from './pages/ExamCalendar';
 import Users from './pages/Users';
 import Login from './pages/Login';
 import Account from './pages/Account';
@@ -54,6 +55,7 @@ export default function App() {
                 <Route path="enroll" element={<Enroll />} />
                 <Route path="modules" element={<Modules />} />
                 <Route path="bookings" element={<Bookings />} />
+                <Route path="calendar" element={<ExamCalendar />} />
                 <Route path="users" element={<Users />} />
                 <Route path="account" element={<Account />} />
               </Route>

@@ -1,5 +1,5 @@
 import { Link, Outlet, useLocation } from 'react-router-dom';
-import { LayoutDashboard, MapPin, Users, UserPlus, LogOut, ShieldCheck, ChevronRight, Sparkles, BookOpen, CalendarCheck, KeyRound, UserCog } from 'lucide-react';
+import { LayoutDashboard, MapPin, Users, UserPlus, LogOut, ShieldCheck, ChevronRight, Sparkles, BookOpen, CalendarCheck, CalendarDays, KeyRound, UserCog } from 'lucide-react';
 import { useAuth } from '@/lib/auth';
 
 const VERSION = 'v1.2.0-beta';
@@ -12,6 +12,7 @@ const allNavItems = [
   { path: '/enroll', label: 'Enrollment', icon: UserPlus },
   { path: '/modules', label: 'Modules', icon: BookOpen },
   { path: '/bookings', label: 'Exam Bookings', icon: CalendarCheck },
+  { path: '/calendar', label: 'Exam Calendar', icon: CalendarDays },
   { path: '/users', label: 'Accounts', icon: KeyRound, adminOnly: true },
   { path: '/account', label: 'My account', icon: UserCog },
 ];

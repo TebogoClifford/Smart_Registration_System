@@ -8,17 +8,14 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { api } from '@/lib/api';
 import OverrideDialog from '@/components/OverrideDialog';
+import ExamSittings from '@/components/ExamSittings';
+import { localDate, addDays, formatDay, groupSittings } from '@/lib/exams';
 import {
   RefreshCcw, Wifi, WifiOff, AlertCircle, Download, Filter, UserPlus, Search,
-  Users, CheckCircle2, XCircle, Activity, TrendingUp, MapPin, ArrowUpRight
+  Users, CheckCircle2, XCircle, Activity, TrendingUp, MapPin, ArrowUpRight, CalendarDays, Armchair
 } from 'lucide-react';
 
-const localDate = (date = new Date()) => {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
+const EXAM_DAYS_AHEAD = 14;
 
 const normalizeEvent = (event) => ({
   ...event,
@@ -141,6 +138,67 @@ function VenueBreakdown({ venues, loading }) {
   </div>;
 }
 
+// Exam hall bookings for today and the next two weeks, and halls that still have no seat count.
+function ExamHallBookings({ refreshKey }) {
+  const navigate = useNavigate();
+  const [bookings, setBookings] = useState(null);
+  const [venues, setVenues] = useState([]);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    const today = new Date();
+    Promise.all([api.getBookings({ from: localDate(today), to: localDate(addDays(today, EXAM_DAYS_AHEAD)) }), api.getVenues()])
+      .then(([b, v]) => { if (alive) { setBookings(b); setVenues(v); setFailed(false); } })
+      .catch((error) => { console.error('Failed to load exam bookings:', error); if (alive) setFailed(true); });
+    return () => { alive = false; };
+  }, [refreshKey]);
+
+  const sittings = useMemo(() => groupSittings(bookings ?? []), [bookings]);
+  const today = localDate();
+  const todays = sittings.filter((s) => s.date === today);
+  const seatsBooked = sittings.reduce((n, s) => n + s.modules.reduce((m, x) => m + x.seats, 0), 0);
+  const noSeats = venues.filter((v) => !(v.capacity > 0));
+
+  return (
+    <Card className="rounded-lg border-slate-200/80 shadow-sm">
+      <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-4 space-y-0 pb-3">
+        <div>
+          <CardTitle className="text-base font-bold text-slate-900">Exam hall bookings</CardTitle>
+          <p className="mt-1 text-xs text-slate-500">Today and the next {EXAM_DAYS_AHEAD} days</p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => navigate('/calendar')} className="gap-1.5 rounded-md"><CalendarDays size={14} /> Calendar</Button>
+          <Button size="sm" onClick={() => navigate('/bookings')} className="rounded-md">Book exam</Button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {noSeats.length > 0 && (
+          <p role="status" className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            <Armchair size={14} className="mt-px shrink-0" />
+            <span>{noSeats.map((v) => v.name).join(', ')} {noSeats.length === 1 ? 'has' : 'have'} no seat count yet, so {noSeats.length === 1 ? 'it' : 'they'} can't be booked. <button type="button" className="font-semibold underline" onClick={() => navigate('/venues')}>Set seats</button></span>
+          </p>
+        )}
+        <div className="grid grid-cols-3 gap-3 text-center sm:max-w-md">
+          {[['Exams today', todays.reduce((n, s) => n + s.modules.length, 0)], ['Hall sittings', bookings ? sittings.length : '—'], ['Seats booked', bookings ? seatsBooked.toLocaleString() : '—']].map(([label, value]) => (
+            <div key={label} className="rounded-md bg-slate-50 px-2 py-3">
+              <p className="text-xl font-bold tabular-nums text-slate-900">{value}</p>
+              <p className="mt-0.5 text-[11px] text-slate-500">{label}</p>
+            </div>
+          ))}
+        </div>
+        {failed ? <p className="text-sm text-rose-700">Exam bookings could not be loaded.</p>
+          : bookings === null ? <div className="space-y-3">{[1, 2].map((i) => <div key={i} className="h-20 animate-pulse rounded-md bg-slate-100" />)}</div>
+            : sittings.length === 0 ? <p className="py-6 text-center text-sm text-slate-500">No exams booked in the next {EXAM_DAYS_AHEAD} days.</p>
+              : <>
+                <ExamSittings sittings={sittings.slice(0, 6)} showDate formatDate={(d) => (d === today ? 'Today' : formatDay(d))} className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3" />
+                {sittings.length > 6 && <button type="button" onClick={() => navigate('/calendar')} className="text-xs font-semibold text-blue-700 hover:text-blue-900">+{sittings.length - 6} more sittings in the calendar</button>}
+              </>}
+      </CardContent>
+    </Card>
+  );
+}
+
 function TableSkeleton() {
   return <div className="space-y-3 p-2" aria-label="Loading events">
     {[...Array(5)].map((_, i) => <div key={i} className="flex animate-pulse items-center gap-4 rounded-md bg-slate-50 p-4">
@@ -168,6 +226,7 @@ export default function Dashboard() {
   const [searchTerm, setSearchTerm] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [statsWarning, setStatsWarning] = useState('');
+  const [examRefresh, setExamRefresh] = useState(0);
 
   const fetchDashboard = useCallback(async (manual = false) => {
     if (manual) setRefreshing(true);
@@ -288,7 +347,7 @@ export default function Dashboard() {
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <StatusIndicator status={connectionStatus} />
-            <Button variant="secondary" onClick={() => fetchDashboard(true)} disabled={refreshing} className="gap-2 rounded-md border border-white/10 bg-white text-slate-900 hover:bg-blue-50">
+            <Button variant="secondary" onClick={() => { fetchDashboard(true); setExamRefresh((n) => n + 1); }} disabled={refreshing} className="gap-2 rounded-md border border-white/10 bg-white text-slate-900 hover:bg-blue-50">
               <RefreshCcw size={15} className={refreshing ? 'animate-spin' : ''} /> Refresh data
             </Button>
             <Button onClick={() => navigate('/enroll')} className="gap-2 rounded-md bg-blue-500 text-white hover:bg-blue-400">
@@ -316,6 +375,8 @@ export default function Dashboard() {
         <StatCard label="Registered students" value={totalStudents === null ? '—' : totalStudents.toLocaleString()} detail={totalStudents === null ? 'Student directory total' : `${enrolled.toLocaleString()} enrolled · ${Math.max(0, totalStudents - enrolled).toLocaleString()} not yet enrolled`} Icon={Users} tone="violet"
           footer={totalStudents !== null && <><div className="mb-1.5 flex items-center justify-between text-[11px] text-slate-500"><span>Enrollment progress</span><span className="font-semibold text-slate-700">{enrollmentRate}%</span></div><div className="h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-violet-500 transition-all" style={{ width: `${Math.min(100, Math.max(0, enrollmentRate))}%` }} /></div></>} />
       </section>
+
+      <ExamHallBookings refreshKey={examRefresh} />
 
       <section className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(300px,1fr)]">
         <Card className="rounded-lg border-slate-200/80 shadow-sm">

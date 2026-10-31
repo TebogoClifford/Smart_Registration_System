@@ -128,6 +128,17 @@ test('a student who already sits another exam in the same slot is a clash', asyn
   assert.strictEqual((await call('POST', '/api/bookings', { moduleId: ctx.modC.id, venueId: ctx.big.id, date: DAY, slot: '13:00' })).status, 201);
 });
 
+test('bookings can be listed for a date range (calendar month)', async () => {
+  const mine = (rows) => rows.filter((b) => b.venue_id === ctx.big.id);
+  assert.strictEqual(mine((await call('GET', `/api/bookings?from=${DAY}&to=${DAY}`)).json).length, 3);
+  assert.strictEqual(mine((await call('GET', '/api/bookings?from=2031-03-01&to=2031-03-31')).json).length, 3);
+  assert.strictEqual(mine((await call('GET', '/api/bookings?from=2031-03-05')).json).length, 0);
+  assert.strictEqual(mine((await call('GET', '/api/bookings?to=2031-03-03')).json).length, 0);
+  assert.strictEqual((await call('GET', '/api/bookings?from=2031-03-31&to=2031-03-01')).status, 400);
+  assert.strictEqual((await call('GET', '/api/bookings?from=2031-02-31')).status, 400);
+  assert.strictEqual((await call('GET', `/api/bookings?date=${DAY}&from=${DAY}`)).status, 400);
+});
+
 test('enrolling a student later in a booked module gives them the next free seat', async () => {
   const late = (await call('POST', '/api/students', { student_number: `${tag}L`, name: 'Late', device_id: ctx.device.id })).json;
   assert.strictEqual((await call('PUT', `/api/students/${late.id}/modules`, { moduleIds: [ctx.modA.id] })).status, 200);
