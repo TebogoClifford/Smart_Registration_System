@@ -1,6 +1,8 @@
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import { LayoutDashboard, MapPin, Users, LogOut, ShieldCheck, ChevronRight, CalendarCheck, KeyRound, UserCog } from 'lucide-react';
+import { useEffect } from 'react';
 import { useAuth } from '@/lib/auth';
+import { rememberPage, lastPage } from '@/lib/drafts';
 
 const VERSION = 'v1.2.0-beta';
 const initialsOf = (name = '') => name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?';
@@ -25,6 +27,10 @@ const allNavItems = [
 const under = (pathname, base) => pathname === base || pathname.startsWith(`${base}/`);
 const isInSection = (pathname, item) => (item.path === '/' ? pathname === '/' : item.match.some((m) => under(pathname, m)));
 
+// Where a tab or sidebar entry leads: back to the last page you had open there (e.g. the student you
+// were editing, with the list's filters), or to its main page when you are already in it.
+const target = (key, home, inside) => (inside ? home : lastPage(key) ?? home);
+
 // The tab row of a section (Student list · Enrolment · Modules, or Exam bookings · Exam calendar).
 function SectionTabs({ tabs, pathname }) {
   return (
@@ -32,7 +38,7 @@ function SectionTabs({ tabs, pathname }) {
       {tabs.map((t) => {
         const active = under(pathname, t.path);
         return (
-          <Link key={t.path} to={t.path} aria-current={active ? 'page' : undefined}
+          <Link key={t.path} to={target(`tab:${t.path}`, t.path, active)} aria-current={active ? 'page' : undefined}
             className={`-mb-px whitespace-nowrap border-b-2 px-4 py-2.5 text-sm font-semibold transition-colors ${active ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800'}`}>
             {t.label}
           </Link>
@@ -62,12 +68,21 @@ export default function Layout() {
   const roleLabel = user?.role === 'admin' ? 'Administrator' : 'Invigilator';
   const currentPage = navItems.find((item) => isInSection(location.pathname, item)) || navItems[0];
 
+  // remember the page open in each section and tab (with its ?search), to come back to it later
+  const here = location.pathname + location.search;
+  useEffect(() => {
+    for (const item of allNavItems) {
+      if (item.path !== '/' && isInSection(location.pathname, item)) rememberPage(`section:${item.path}`, here);
+      for (const t of item.tabs ?? []) if (under(location.pathname, t.path)) rememberPage(`tab:${t.path}`, here);
+    }
+  }, [location.pathname, here]);
+
   const renderNavItem = (item) => {
     const Icon = item.icon;
     const isActive = isInSection(location.pathname, item);
 
     return (
-      <Link key={item.path} to={item.path} aria-current={isActive ? 'page' : undefined}
+      <Link key={item.path} to={target(`section:${item.path}`, item.path, isActive)} aria-current={isActive ? 'page' : undefined}
         className={`nav-link ${isActive ? 'nav-link-active' : ''}`}>
         <Icon size={18} strokeWidth={isActive ? 2.4 : 2} />
         <span>{item.label}</span>

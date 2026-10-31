@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import ChangePasswordForm from '@/components/ChangePasswordForm';
 import { api } from '@/lib/api';
+import { useDraft, hasDraft } from '@/lib/drafts';
 import { useAuth } from '@/lib/auth';
 
 const when = (t) => (t ? new Date(t).toLocaleString() : '—');
@@ -14,10 +15,14 @@ const when = (t) => (t ? new Date(t).toLocaleString() : '—');
 // Email, role and staff number are set by an administrator on the Accounts page.
 export default function Account() {
   const { user, setUser, authRequired } = useAuth();
-  const [form, setForm] = useState({ name: '', phone: '' });
+  // unsaved name/phone edits are kept when you leave and come back (passwords are never kept)
+  const [form, setForm, formDraft] = useDraft(`me:${user?.id ?? ''}`, { name: '', phone: '' });
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => { setForm({ name: user?.name ?? '', phone: user?.phone ?? '' }); }, [user]);
+  useEffect(() => {
+    if (!hasDraft(`me:${user?.id ?? ''}`)) formDraft.reset({ name: user?.name ?? '', phone: user?.phone ?? '' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the draft helpers are stable
+  }, [user]);
 
   if (!authRequired) return <p className="py-10 text-center text-muted-foreground">Sign-in is switched off on this server, so there is no account to manage.</p>;
 
@@ -25,7 +30,9 @@ export default function Account() {
     e.preventDefault();
     setSaving(true);
     try {
-      setUser(await api.updateMe({ name: form.name, phone: form.phone }));
+      const saved = await api.updateMe({ name: form.name, phone: form.phone });
+      formDraft.reset({ name: saved.name ?? '', phone: saved.phone ?? '' });
+      setUser(saved);
       toast.success('Details saved');
     } catch (err) { toast.error(err.message); } finally { setSaving(false); }
   };

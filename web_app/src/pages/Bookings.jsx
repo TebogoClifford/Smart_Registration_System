@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import ConfirmDeleteDialog from '@/components/ConfirmDeleteDialog';
 import EditBookingDialog from '@/components/EditBookingDialog';
 import { api } from '@/lib/api';
+import { useDraft } from '@/lib/drafts';
 
 const SLOTS = [{ value: '09:00', label: '09:00 session' }, { value: '13:00', label: '13:00 session' }];
 
@@ -20,16 +21,20 @@ export default function Bookings() {
   const [modules, setModules] = useState([]);
   const [venues, setVenues] = useState([]);
   const [bookings, setBookings] = useState([]);
-  const [moduleId, setModuleId] = useState('');
-  const [venueId, setVenueId] = useState('');
-  // ?date=YYYY-MM-DD comes from the exam calendar's "Book an exam on this day"
-  const [date, setDate] = useState(() => (/^\d{4}-\d{2}-\d{2}$/.test(searchParams.get('date') ?? '') ? searchParams.get('date') : ''));
-  const [slot, setSlot] = useState('09:00');
+  // the booking form and an open Edit exam dialog are kept when you leave the page and come back
+  const [moduleId, setModuleId, moduleDraft] = useDraft('book:module', '');
+  const [venueId, setVenueId] = useDraft('book:venue', '');
+  const [date, setDate] = useDraft('book:date', '');
+  const [slot, setSlot] = useDraft('book:slot', '09:00');
   const [avail, setAvail] = useState(null);
   const [saving, setSaving] = useState(false);
   const [expanded, setExpanded] = useState(null);
   const [seatList, setSeatList] = useState([]);
-  const [editing, setEditing] = useState(null); // booking open in the Edit exam dialog
+  const [editing, setEditing] = useDraft('book:editing', null); // booking open in the Edit exam dialog
+
+  // ?date=YYYY-MM-DD comes from the exam calendar's "Book an exam on this day" and wins over a draft
+  const dateParam = searchParams.get('date') ?? '';
+  useEffect(() => { if (/^\d{4}-\d{2}-\d{2}$/.test(dateParam)) setDate(dateParam); }, [dateParam, setDate]);
 
   const loadBookings = useCallback(async () => {
     try { setBookings(await api.getBookings()); } catch (err) { toast.error(err.message); }
@@ -70,7 +75,7 @@ export default function Bookings() {
       if (b.notReadyAtVenue?.length) {
         toast.warning(`${b.notReadyAtVenue.length} seated student(s) are not enrolled on a device at this venue yet and will be refused at the door.`, { duration: 10000 });
       }
-      setModuleId('');
+      moduleDraft.reset(''); // booked: the module choice is done; hall, date and session stay for the next one
       loadAll(); loadAvail();
     } catch (err) { toast.error(err.message); loadAvail(); } finally { setSaving(false); }
   };

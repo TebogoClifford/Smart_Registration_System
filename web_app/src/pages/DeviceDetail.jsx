@@ -8,7 +8,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import ConfirmDeleteDialog from '@/components/ConfirmDeleteDialog';
+import DraftNotice from '@/components/DraftNotice';
 import { api } from '@/lib/api';
+import { useDraft, hasDraft, clearDrafts } from '@/lib/drafts';
 import { useAuth } from '@/lib/auth';
 import { ArrowLeft, Eye, Copy } from 'lucide-react';
 
@@ -18,8 +20,10 @@ export default function DeviceDetail() {
   const { isAdmin } = useAuth(); // the server only sends api_key to administrators
   const [device, setDevice] = useState(null);
   const [venues, setVenues] = useState([]);
-  const [name, setName] = useState('');
-  const [venueId, setVenueId] = useState('');
+  // unsaved edits are kept when you go elsewhere and come back (lib/drafts.js)
+  const k = `device:${id}:`;
+  const [name, setName, nameDraft] = useDraft(`${k}name`, '');
+  const [venueId, setVenueId, venueDraft] = useDraft(`${k}venue`, '');
   const [students, setStudents] = useState([]);
   const [showKey, setShowKey] = useState(false);
 
@@ -27,8 +31,8 @@ export default function DeviceDetail() {
     try {
       const d = await api.getDevice(id);
       setDevice(d);
-      setName(d.name);
-      setVenueId(String(d.venue_id));
+      if (!hasDraft(`${k}name`)) nameDraft.reset(d.name);
+      if (!hasDraft(`${k}venue`)) venueDraft.reset(String(d.venue_id));
 
       const vList = await api.getVenues();
       setVenues(vList);
@@ -38,14 +42,17 @@ export default function DeviceDetail() {
     } catch {
       toast.error('Failed to load device details');
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the draft helpers are stable
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
+  const discard = () => { clearDrafts(k); load(); };
 
   const handleSave = async () => {
     try {
       await api.updateDevice(id, Number(venueId), name);
       toast.success('Device updated');
+      clearDrafts(k);
       load();
     } catch (err) {
       toast.error(err.message);
@@ -66,9 +73,11 @@ export default function DeviceDetail() {
 
   return (
     <div className="space-y-6">
-      <Button variant="ghost" size="sm" onClick={() => navigate('/devices')} className="gap-2">
+      <Button variant="ghost" size="sm" onClick={() => { clearDrafts(k); navigate('/devices'); }} className="gap-2">
         <ArrowLeft size={16} /> Back to Devices
       </Button>
+
+      <DraftNotice show={nameDraft.restored || venueDraft.restored} onDiscard={discard} />
 
       <Card>
         <CardHeader>

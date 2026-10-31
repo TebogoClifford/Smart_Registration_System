@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { api } from '@/lib/api';
+import { rememberPage } from '@/lib/drafts';
 
 const ALL = 'all';
 const STATUSES = [
@@ -36,6 +37,9 @@ function Filter({ label, value, onChange, items }) {
 export default function StudentList() {
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
+  // "Back to Students" on a student's page returns to the list as it is now
+  const query = params.toString();
+  useEffect(() => { rememberPage('list:/students', `/students${query ? `?${query}` : ''}`); }, [query]);
   const [students, setStudents] = useState([]);
   const [courses, setCourses] = useState([]);
   const [modules, setModules] = useState([]);

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, getToken, setToken, LOGOUT_EVENT, PASSWORD_CHANGE_EVENT } from '@/lib/api';
 import { AuthContext } from '@/lib/auth';
+import { clearDrafts, forgetPages } from '@/lib/drafts';
 
 // Asks the server whether sign-in is switched on. If it is, restores the session from the saved token.
 // If it is not (server run with AUTH_DISABLED=true for tests), the console works as an administrator.
@@ -26,7 +27,8 @@ export default function AuthProvider({ children }) {
 
   useEffect(() => { boot(); }, [boot]);
 
-  const logout = useCallback(() => { setToken(null); setUser(null); }, []);
+  // signing out also forgets unsaved drafts and remembered pages (the next person must not see them)
+  const logout = useCallback(() => { clearDrafts(); forgetPages(); setToken(null); setUser(null); }, []);
   // re-read who I am (e.g. after a password reset or a profile change)
   const refreshUser = useCallback(async () => {
     try { setUser(await api.me()); } catch { /* a 401 already signs out via LOGOUT_EVENT */ }

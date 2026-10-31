@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
+import { useDraft, clearDrafts } from '@/lib/drafts';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -10,12 +11,15 @@ const SLOTS = [{ value: '09:00', label: '09:00 session' }, { value: '13:00', lab
 // Move one exam booking (a module's sitting) to another hall, day or session. The server seats the
 // module's students again; if they don't fit or someone has another exam then, nothing changes.
 // `booking` is a row from GET /api/bookings; `onSaved(updatedRow)` runs after a successful move.
-export default function EditBookingDialog({ booking, venues, onClose, onSaved }) {
-  const [venueId, setVenueId] = useState(String(booking.venue_id));
-  const [date, setDate] = useState(booking.exam_date);
-  const [slot, setSlot] = useState(booking.slot);
+export default function EditBookingDialog({ booking, venues, onClose: close, onSaved }) {
+  // kept while you visit other pages; dropped when you save or cancel
+  const k = `bookedit:${booking.id}:`;
+  const [venueId, setVenueId] = useDraft(`${k}venue`, String(booking.venue_id));
+  const [date, setDate] = useDraft(`${k}date`, booking.exam_date);
+  const [slot, setSlot] = useDraft(`${k}slot`, booking.slot);
   const [avail, setAvail] = useState(null);
   const [saving, setSaving] = useState(false);
+  const onClose = useCallback(() => { clearDrafts(k); close(); }, [k, close]);
 
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
@@ -46,6 +50,7 @@ export default function EditBookingDialog({ booking, venues, onClose, onSaved })
     try {
       const row = await api.updateBooking(booking.id, Number(venueId), date, slot);
       toast.success(`${booking.module_code} moved to ${row.venue_name}, ${row.exam_date} ${row.slot} · ${row.seats} seats`);
+      clearDrafts(k);
       onSaved(row);
     } catch (err) {
       toast.error(err.message);

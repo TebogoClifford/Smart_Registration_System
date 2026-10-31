@@ -6,7 +6,9 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import ConfirmDeleteDialog from '@/components/ConfirmDeleteDialog';
+import DraftNotice from '@/components/DraftNotice';
 import { api } from '@/lib/api';
+import { useDraft, hasDraft, clearDrafts } from '@/lib/drafts';
 import { useAuth } from '@/lib/auth';
 import { ArrowLeft } from 'lucide-react';
 
@@ -15,8 +17,10 @@ export default function VenueDetail() {
   const navigate = useNavigate();
   const { isAdmin } = useAuth(); // invigilators may look, only administrators may change
   const [venue, setVenue] = useState(null);
-  const [name, setName] = useState('');
-  const [capacity, setCapacity] = useState('');
+  // unsaved edits are kept when you go elsewhere and come back (lib/drafts.js)
+  const k = `venue:${id}:`;
+  const [name, setName, nameDraft] = useDraft(`${k}name`, '');
+  const [capacity, setCapacity, capacityDraft] = useDraft(`${k}capacity`, '');
   const [devices, setDevices] = useState([]);
 
   const load = useCallback(async () => {
@@ -29,17 +33,19 @@ export default function VenueDetail() {
         return;
       }
       setVenue(found);
-      setName(found.name);
-      setCapacity(String(found.capacity ?? ''));
+      if (!hasDraft(`${k}name`)) nameDraft.reset(found.name);
+      if (!hasDraft(`${k}capacity`)) capacityDraft.reset(String(found.capacity ?? ''));
 
       const allDevices = await api.getDevices();
       setDevices(allDevices.filter((d) => String(d.venue_id) === id));
     } catch {
       toast.error('Failed to load venue details');
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the draft helpers are stable
   }, [id, navigate]);
 
   useEffect(() => { load(); }, [load]);
+  const discard = () => { clearDrafts(k); load(); };
 
   const [saving, setSaving] = useState(false);
   const handleSave = async (e) => {
@@ -50,6 +56,7 @@ export default function VenueDetail() {
     setSaving(true);
     try {
       await api.updateVenue(id, name.trim(), seats);
+      clearDrafts(k);
       toast.success(`${name.trim()} saved · ${seats} seats`);
       navigate('/venues');
     } catch (err) {
@@ -72,9 +79,11 @@ export default function VenueDetail() {
 
   return (
     <div className="space-y-6">
-      <Button variant="ghost" size="sm" onClick={() => navigate('/venues')} className="gap-2">
+      <Button variant="ghost" size="sm" onClick={() => { clearDrafts(k); navigate('/venues'); }} className="gap-2">
         <ArrowLeft size={16} /> Back to Venues
       </Button>
+
+      <DraftNotice show={nameDraft.restored || capacityDraft.restored} onDiscard={discard} />
 
       <Card>
         <CardHeader>

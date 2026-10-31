@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import ExamSittings from '@/components/ExamSittings';
 import EditBookingDialog from '@/components/EditBookingDialog';
 import { api } from '@/lib/api';
+import { useDraft } from '@/lib/drafts';
 import { localDate, parseDate, addDays, formatDay, hallColour, groupSittings } from '@/lib/exams';
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -22,12 +23,15 @@ function monthGrid(month) {
 export default function ExamCalendar() {
   const navigate = useNavigate();
   const today = localDate();
-  const [month, setMonth] = useState(() => parseDate(today));
-  const [selected, setSelected] = useState(today);
+  // the month and day you were looking at (and an open Edit dialog) are kept when you come back
+  const [monthKey, setMonthKey] = useDraft('cal:month', today);
+  const month = useMemo(() => parseDate(monthKey), [monthKey]);
+  const setMonth = (update) => setMonthKey(localDate(typeof update === 'function' ? update(month) : update));
+  const [selected, setSelected] = useDraft('cal:selected', today);
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [venues, setVenues] = useState([]);
-  const [editing, setEditing] = useState(null); // booking open in the Edit exam dialog
+  const [editing, setEditing] = useDraft('cal:editing', null); // booking open in the Edit exam dialog
   const [reload, setReload] = useState(0);
 
   const days = useMemo(() => monthGrid(month), [month]);

@@ -8,7 +8,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import ConfirmDeleteDialog from '@/components/ConfirmDeleteDialog';
 import CourseSelect from '@/components/CourseSelect';
 import StudentEnrolment, { EnrolFaceButton } from '@/components/StudentEnrolment';
+import DraftNotice from '@/components/DraftNotice';
 import { api } from '@/lib/api';
+import { useDraft, hasDraft, clearDrafts, lastPage } from '@/lib/drafts';
 import { ArrowLeft } from 'lucide-react';
 
 export default function StudentDetail() {
@@ -16,22 +18,28 @@ export default function StudentDetail() {
   const navigate = useNavigate();
   const [student, setStudent] = useState(null);
   const [devices, setDevices] = useState([]);
-  const [studentNumber, setStudentNumber] = useState('');
-  const [name, setName] = useState('');
-  const [deviceId, setDeviceId] = useState('');
-  const [courseName, setCourseName] = useState('');
+  // the form keeps unsaved edits when you go to another tab and come back (lib/drafts.js)
+  const k = `student:${id}:`;
+  const [studentNumber, setStudentNumber, numberDraft] = useDraft(`${k}number`, '');
+  const [name, setName, nameDraft] = useDraft(`${k}name`, '');
+  const [deviceId, setDeviceId, deviceDraft] = useDraft(`${k}device`, '');
+  const [courseName, setCourseName, courseDraft] = useDraft(`${k}course`, '');
   const [allModules, setAllModules] = useState([]);
-  const [moduleIds, setModuleIds] = useState(new Set());
+  const [moduleIds, setModuleIds, modulesDraft] = useDraft(`${k}modules`, () => new Set());
+  const drafts = [numberDraft, nameDraft, deviceDraft, courseDraft, modulesDraft];
+  const restored = drafts.some((d) => d.restored);
 
   const load = useCallback(async () => {
     try {
       const s = await api.getStudent(id);
       setStudent(s);
-      setStudentNumber(s.student_number);
-      setName(s.name);
-      setDeviceId(String(s.device_id));
-      setCourseName(s.course_name ?? '');
-      setModuleIds(new Set((s.modules ?? []).map((m) => m.id)));
+      // fields you have not changed show what is stored; changed ones keep your draft
+      const fill = (field, draft, value) => { if (!hasDraft(`${k}${field}`)) draft.reset(value); };
+      fill('number', numberDraft, s.student_number);
+      fill('name', nameDraft, s.name);
+      fill('device', deviceDraft, String(s.device_id));
+      fill('course', courseDraft, s.course_name ?? '');
+      fill('modules', modulesDraft, new Set((s.modules ?? []).map((m) => m.id)));
 
       const [dList, mList] = await Promise.all([api.getDevices(), api.getModules()]);
       setDevices(dList);
@@ -39,15 +47,19 @@ export default function StudentDetail() {
     } catch {
       toast.error('Failed to load student details');
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the draft helpers are stable; reload only for another student
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
+
+  const discard = () => { clearDrafts(k); load(); };
 
   const handleSave = async () => {
     try {
       await api.updateStudent(id, studentNumber, name, Number(deviceId), courseName);
       await api.setStudentModules(id, [...moduleIds]);
       toast.success('Student updated');
+      clearDrafts(k);
       load();
     } catch (err) {
       toast.error(err.message);
@@ -68,10 +80,12 @@ export default function StudentDetail() {
 
   return (
     <div className="space-y-6">
-      {/* back to the list as it was (search and filters kept) when we came from it */}
-      <Button variant="ghost" size="sm" onClick={() => (window.history.length > 1 ? navigate(-1) : navigate('/students'))} className="gap-2">
+      {/* back to the list as you last left it (search and filters kept) */}
+      <Button variant="ghost" size="sm" onClick={() => { clearDrafts(k); navigate(lastPage('list:/students') ?? '/students'); }} className="gap-2">
         <ArrowLeft size={16} /> Back to Students
       </Button>
+
+      <DraftNotice show={restored} onDiscard={discard} />
 
       <StudentEnrolment student={student} device={devices.find((d) => d.id === student.device_id)} />
 

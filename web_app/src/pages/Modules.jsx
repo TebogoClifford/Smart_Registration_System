@@ -6,18 +6,20 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import ConfirmDeleteDialog from '@/components/ConfirmDeleteDialog';
 import { api } from '@/lib/api';
+import { useDraft, clearDrafts } from '@/lib/drafts';
 
 // Modules (subjects). Students are enrolled in modules here; an exam booking later seats everyone enrolled.
 export default function Modules() {
   const [modules, setModules] = useState([]);
   const [students, setStudents] = useState([]);
-  const [code, setCode] = useState('');
-  const [name, setName] = useState('');
+  // the new-module form, the open module's student ticks and the filter are kept when you leave and come back
+  const [code, setCode] = useDraft('modules:code', '');
+  const [name, setName] = useDraft('modules:name', '');
   const [saving, setSaving] = useState(false);
-  const [open, setOpen] = useState(null);          // module whose student list is open
-  const [selected, setSelected] = useState(new Set());
-  const [original, setOriginal] = useState(new Set());
-  const [filter, setFilter] = useState('');
+  const [open, setOpen] = useDraft('modules:open', null);          // module whose student list is open
+  const [selected, setSelected] = useDraft('modules:selected', () => new Set());
+  const [original, setOriginal] = useDraft('modules:original', () => new Set());
+  const [filter, setFilter] = useDraft('modules:filter', '');
 
   const load = useCallback(async () => {
     try {
@@ -33,7 +35,7 @@ export default function Modules() {
     try {
       await api.createModule(code, name);
       toast.success('Module created');
-      setCode(''); setName('');
+      setCode(''); setName(''); clearDrafts('modules:code'); clearDrafts('modules:name');
       load();
     } catch (err) { toast.error(err.message); } finally { setSaving(false); }
   };
@@ -62,6 +64,7 @@ export default function Modules() {
       for (const id of drop) await api.removeModuleStudent(open.id, id);
       toast.success('Enrolments saved');
       setOpen(null);
+      clearDrafts('modules:selected'); clearDrafts('modules:original'); clearDrafts('modules:filter');
       load();
     } catch (err) { toast.error(err.message); } finally { setSaving(false); }
   };
@@ -131,7 +134,7 @@ export default function Modules() {
             <div className="flex items-center justify-between gap-2">
               <span className="text-sm text-muted-foreground">{selected.size} selected</span>
               <div className="flex gap-2">
-                <Button variant="ghost" onClick={() => setOpen(null)}>Cancel</Button>
+                <Button variant="ghost" onClick={() => { setOpen(null); clearDrafts('modules:selected'); clearDrafts('modules:original'); clearDrafts('modules:filter'); }}>Cancel</Button>
                 <Button onClick={saveStudents} disabled={saving}>Save</Button>
               </div>
             </div>

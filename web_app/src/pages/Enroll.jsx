@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import CourseSelect from '@/components/CourseSelect';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import { useDraft, clearDrafts } from '@/lib/drafts';
 import { UserPlus, CheckCircle2, Info, AlertCircle, Loader2, XCircle, RefreshCcw } from 'lucide-react';
 
 const POLL_MS = 3000;                 // how often the page asks the backend whether the device has finished
@@ -29,21 +30,23 @@ function TableSkeleton() {
 }
 
 export default function Enroll() {
-  const [step, setStep] = useState(1); // 1: Form, 2: Progress
-  const [captureState, setCaptureState] = useState('capturing'); // capturing, enrolled, failed
+  // Everything here is kept when you go to another tab and come back (lib/drafts.js),
+  // including a capture that is still running.
+  const [step, setStep] = useDraft('enroll:step', 1); // 1: Form, 2: Progress
+  const [captureState, setCaptureState] = useDraft('enroll:capture', 'capturing'); // capturing, enrolled, failed
   const [loading, setLoading] = useState(false);
   const { user } = useAuth();
-  const [createdId, setCreatedId] = useState(null);   // id of the pending student record the device must capture
-  const [startedAt, setStartedAt] = useState(0);      // when the capture request was made (for the 10-minute limit)
-  const [failReason, setFailReason] = useState('');   // 'device' (device reported failure) or 'timeout'
+  const [createdId, setCreatedId] = useDraft('enroll:createdId', null);   // id of the pending student record the device must capture
+  const [startedAt, setStartedAt] = useDraft('enroll:startedAt', 0);      // when the capture request was made (for the 10-minute limit)
+  const [failReason, setFailReason] = useDraft('enroll:failReason', '');  // 'device' (device reported failure) or 'timeout'
 
   // Form State
-  const [studentNumber, setStudentNumber] = useState('');
-  const [name, setName] = useState('');
-  const [courseName, setCourseName] = useState('');
-  const [venueId, setVenueId] = useState('');
-  const [deviceId, setDeviceId] = useState('');
-  const [consent, setConsent] = useState(false);
+  const [studentNumber, setStudentNumber] = useDraft('enroll:number', '');
+  const [name, setName] = useDraft('enroll:name', '');
+  const [courseName, setCourseName] = useDraft('enroll:course', '');
+  const [venueId, setVenueId] = useDraft('enroll:venue', '');
+  const [deviceId, setDeviceId] = useDraft('enroll:device', '');
+  const [consent, setConsent] = useDraft('enroll:consent', false);
 
   // Data State
   const [venues, setVenues] = useState([]);
@@ -120,7 +123,7 @@ export default function Enroll() {
     };
     const timer = window.setInterval(check, POLL_MS);
     return () => { stopped = true; window.clearInterval(timer); };
-  }, [step, captureState, createdId, startedAt, loadRecentEnrollments]);
+  }, [step, captureState, createdId, startedAt, loadRecentEnrollments, setCaptureState, setFailReason]);
 
   const filteredDevices = useMemo(
     () => devices.filter((device) => String(device.venue_id) === String(venueId)),
@@ -211,6 +214,7 @@ export default function Enroll() {
     setDeviceId('');
     setConsent(false);
     setErrors({});
+    clearDrafts('enroll:'); // a finished enrolment leaves nothing to restore
   };
 
   return (

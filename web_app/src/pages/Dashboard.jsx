@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { api } from '@/lib/api';
+import { useDraft } from '@/lib/drafts';
 import OverrideDialog from '@/components/OverrideDialog';
 import ExamSittings from '@/components/ExamSittings';
 import RecognisedNow from '@/components/RecognisedNow';
@@ -219,16 +220,16 @@ function csvCell(value) {
 export default function Dashboard() {
   const navigate = useNavigate();
   const [events, setEvents] = useState([]);
-  const [overrideFor, setOverrideFor] = useState(null);
+  const [overrideFor, setOverrideFor] = useDraft('dash:override', null); // kept with its typed reason across pages
   const [analytics, setAnalytics] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState('reconnecting');
   const [lastUpdated, setLastUpdated] = useState(null);
   const [clock, setClock] = useState(() => Date.now());
-  const [decisionFilter, setDecisionFilter] = useState('all');
+  const [decisionFilter, setDecisionFilter] = useDraft('dash:decision', 'all');
   const [dateFilter, setDateFilter] = useState(localDate());
-  const [searchTerm, setSearchTerm] = useState('');
+  const [searchTerm, setSearchTerm] = useDraft('dash:search', '');
   const [errorMessage, setErrorMessage] = useState('');
   const [statsWarning, setStatsWarning] = useState('');
   const [examRefresh, setExamRefresh] = useState(0);

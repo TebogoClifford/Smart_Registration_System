@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { api } from '@/lib/api';
+import { useDraft } from '@/lib/drafts';
 import { useAuth } from '@/lib/auth';
 import { Plus, MapPin, Cpu, Search, RefreshCw, Wifi, WifiOff, CircleHelp, Activity, Clock3 } from 'lucide-react';
 
@@ -15,11 +16,12 @@ export default function VenueDeviceManagement() {
   const { isAdmin } = useAuth(); // only administrators add venues and devices (the server enforces it too)
   const [venues, setVenues] = useState([]);
   const [devices, setDevices] = useState([]);
-  const [venueName, setVenueName] = useState('');
-  const [venueCapacity, setVenueCapacity] = useState('');
-  const [deviceName, setDeviceName] = useState('');
-  const [venueId, setVenueId] = useState('');
-  const [search, setSearch] = useState('');
+  // the add-venue / add-device forms and the search are kept when you leave and come back
+  const [venueName, setVenueName] = useDraft('venues:name', '');
+  const [venueCapacity, setVenueCapacity] = useDraft('venues:capacity', '');
+  const [deviceName, setDeviceName] = useDraft('devices:name', '');
+  const [venueId, setVenueId] = useDraft('devices:venue', '');
+  const [search, setSearch] = useDraft('venues:search', '');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [deviceMetricsUpdatedAt, setDeviceMetricsUpdatedAt] = useState(null);

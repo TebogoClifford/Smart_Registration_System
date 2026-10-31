@@ -4,13 +4,17 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
+import { useDraft, clearDrafts } from '@/lib/drafts';
 
 // Lets an invigilator record a manual entry override for a denied/error event.
 // When sign-in is on, the server uses the signed-in account, so the name box is hidden.
-export default function OverrideDialog({ event, onClose, onDone }) {
+export default function OverrideDialog({ event, onClose: close, onDone }) {
   const { authRequired, user } = useAuth();
-  const [who, setWho] = useState('');
-  const [reason, setReason] = useState('');
+  // what you typed is kept if you visit another page and come back; Cancel or saving drops it
+  const k = `override:${event.id}:`;
+  const [who, setWho] = useDraft(`${k}who`, '');
+  const [reason, setReason] = useDraft(`${k}reason`, '');
+  const onClose = () => { clearDrafts(k); close(); };
   const [saving, setSaving] = useState(false);
   const invigilator = authRequired ? user?.email : who.trim();
   const ok = !!invigilator && reason.trim().length >= 3 && !saving;
@@ -21,6 +25,7 @@ export default function OverrideDialog({ event, onClose, onDone }) {
     try {
       await api.overrideEvent(event.id, invigilator, reason.trim());
       toast.success(`Entry override recorded for event ${event.id}`);
+      clearDrafts(k);
       onDone();
     } catch (err) {
       toast.error(err.message);

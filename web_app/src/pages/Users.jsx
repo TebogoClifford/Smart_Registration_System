@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import ConfirmDeleteDialog from '@/components/ConfirmDeleteDialog';
 import { api } from '@/lib/api';
+import { useDraft } from '@/lib/drafts';
 import { useAuth } from '@/lib/auth';
 
 const ROLES = [{ value: 'invigilator', label: 'Invigilator' }, { value: 'admin', label: 'Administrator' }];
@@ -29,8 +30,10 @@ function Field({ id, label, children }) {
 export default function Users() {
   const { user: me, isAdmin } = useAuth();
   const [users, setUsers] = useState([]);
-  const [form, setForm] = useState(EMPTY);
-  const [editing, setEditing] = useState(null);      // the account being edited (copy of its fields)
+  // the new-account form and an account being edited are kept when you leave and come back;
+  // the password is never stored
+  const [form, setForm, formDraft] = useDraft('users:new', EMPTY, { omit: ['password'] });
+  const [editing, setEditing] = useDraft('users:editing', null);      // the account being edited (copy of its fields)
   const [issued, setIssued] = useState(null);        // { email, password } shown once
   const [saving, setSaving] = useState(false);
 
@@ -53,7 +56,7 @@ export default function Users() {
       const created = await api.createUser(body);
       toast.success(`Account created for ${created.email}`);
       setIssued({ email: created.email, password: created.temporaryPassword ?? form.password, mustChange: created.must_change_password });
-      setForm(EMPTY);
+      formDraft.reset(EMPTY);
       load();
     } catch (err) { toast.error(err.message); } finally { setSaving(false); }
   };
