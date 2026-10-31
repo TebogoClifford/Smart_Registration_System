@@ -22,8 +22,8 @@ test('setup: venue, two devices, two students', async () => {
   ctx.venue = (await call('POST', '/api/venues', { name: 'Extra Hall', capacity: 50 })).json;
   ctx.dev = (await call('POST', '/api/devices', { venue_id: ctx.venue.id, name: 'Extra Dev' })).json;
   ctx.dev2 = (await call('POST', '/api/devices', { venue_id: ctx.venue.id, name: 'Extra Dev 2' })).json;
-  ctx.s1 = (await call('POST', '/api/students', { student_number: 'X1', name: 'One', device_id: ctx.dev.id })).json;
-  ctx.s2 = (await call('POST', '/api/students', { student_number: 'X2', name: 'Two', device_id: ctx.dev.id })).json;
+  ctx.s1 = (await call('POST', '/api/students', { email: 'student@example.com', student_number: 'X1', name: 'One', device_id: ctx.dev.id })).json;
+  ctx.s2 = (await call('POST', '/api/students', { email: 'student@example.com', student_number: 'X2', name: 'Two', device_id: ctx.dev.id })).json;
   assert.ok(ctx.s1.id && ctx.s2.id);
 });
 
@@ -61,20 +61,20 @@ test('device: never-seen device reports inactive', async () => {
 });
 
 test('student: edit details', async () => {
-  const r = await call('PUT', `/api/students/${ctx.s2.id}`, { student_number: 'X2b', name: 'Two B', device_id: ctx.dev.id });
+  const r = await call('PUT', `/api/students/${ctx.s2.id}`, { email: 'student@example.com', student_number: 'X2b', name: 'Two B', device_id: ctx.dev.id });
   assert.strictEqual(r.status, 200);
   assert.strictEqual(r.json.name, 'Two B');
 });
 test('student: edit to a number already used on that device -> 409', async () => {
-  const r = await call('PUT', `/api/students/${ctx.s2.id}`, { student_number: 'X1', name: 'Two', device_id: ctx.dev.id });
+  const r = await call('PUT', `/api/students/${ctx.s2.id}`, { email: 'student@example.com', student_number: 'X1', name: 'Two', device_id: ctx.dev.id });
   assert.strictEqual(r.status, 409);
 });
 test('student: edit keeping own number is allowed', async () => {
-  const r = await call('PUT', `/api/students/${ctx.s1.id}`, { student_number: 'X1', name: 'One renamed', device_id: ctx.dev.id });
+  const r = await call('PUT', `/api/students/${ctx.s1.id}`, { email: 'student@example.com', student_number: 'X1', name: 'One renamed', device_id: ctx.dev.id });
   assert.strictEqual(r.status, 200);
 });
 test('student: same number on a different device is allowed', async () => {
-  const r = await call('POST', '/api/students', { student_number: 'X1', name: 'One elsewhere', device_id: ctx.dev2.id });
+  const r = await call('POST', '/api/students', { email: 'student@example.com', student_number: 'X1', name: 'One elsewhere', device_id: ctx.dev2.id });
   assert.strictEqual(r.status, 201);
 });
 test('student: missing fields -> 400; get unknown -> 404; get bad id -> 400', async () => {
@@ -169,5 +169,5 @@ test('input: names with quotes / unicode / SQL text are stored safely', async ()
 test('input: whitespace-only names are rejected', async () => {
   assert.strictEqual((await call('POST', '/api/venues', { name: '   ', capacity: 10 })).status, 400);
   assert.strictEqual((await call('POST', '/api/devices', { venue_id: ctx.venue.id, name: '   ' })).status, 400);
-  assert.strictEqual((await call('POST', '/api/students', { student_number: ' ', name: 'x', device_id: ctx.dev.id })).status, 400);
+  assert.strictEqual((await call('POST', '/api/students', { email: 'student@example.com', student_number: ' ', name: 'x', device_id: ctx.dev.id })).status, 400);
 });

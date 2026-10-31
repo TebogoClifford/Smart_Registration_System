@@ -77,7 +77,7 @@ export default function StudentList() {
   const shown = useMemo(() => {
     const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
     const rows = students.filter((s) => {
-      const text = [s.name, s.student_number, s.course_name, ...(s.modules ?? []).flatMap((m) => [m.code, m.name])].join(' ').toLowerCase();
+      const text = [s.name, s.student_number, s.email, s.course_name, ...(s.modules ?? []).flatMap((m) => [m.code, m.name])].join(' ').toLowerCase();
       if (!words.every((w) => text.includes(w))) return false;
       if (course === 'none' ? s.course_name : course !== ALL && s.course_name !== course) return false;
       if (moduleId === 'none' ? s.modules?.length : moduleId !== ALL && !s.modules?.some((m) => String(m.id) === moduleId)) return false;
@@ -100,7 +100,7 @@ export default function StudentList() {
             <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
             <Input
               type="search" aria-label="Search students" value={q} onChange={(e) => set('q', e.target.value, '')}
-              placeholder="Search by name, student number, course or module…" className="h-10 pl-9"
+              placeholder="Search by name, student number, email, course or module…" className="h-10 pl-9"
             />
           </div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
@@ -142,7 +142,7 @@ export default function StudentList() {
                   {shown.map((s) => (
                     <TableRow key={s.id}>
                       <TableCell className="font-mono text-xs">{s.student_number}</TableCell>
-                      <TableCell className="font-medium">{s.name}</TableCell>
+                      <TableCell><span className="font-medium">{s.name}</span>{s.email && <span className="block text-xs text-muted-foreground">{s.email}</span>}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">{s.course_name || '—'}</TableCell>
                       <TableCell className="text-xs">{s.modules?.length ? s.modules.map((m) => m.code).join(', ') : '—'}</TableCell>
                       <TableCell><Badge variant={STATUS_TONE[s.enrollment_status] ?? 'secondary'}>{s.enrollment_status}</Badge></TableCell>

@@ -22,11 +22,12 @@ export default function StudentDetail() {
   const k = `student:${id}:`;
   const [studentNumber, setStudentNumber, numberDraft] = useDraft(`${k}number`, '');
   const [name, setName, nameDraft] = useDraft(`${k}name`, '');
+  const [email, setEmail, emailDraft] = useDraft(`${k}email`, '');
   const [deviceId, setDeviceId, deviceDraft] = useDraft(`${k}device`, '');
   const [courseName, setCourseName, courseDraft] = useDraft(`${k}course`, '');
   const [allModules, setAllModules] = useState([]);
   const [moduleIds, setModuleIds, modulesDraft] = useDraft(`${k}modules`, () => new Set());
-  const drafts = [numberDraft, nameDraft, deviceDraft, courseDraft, modulesDraft];
+  const drafts = [numberDraft, nameDraft, emailDraft, deviceDraft, courseDraft, modulesDraft];
   const restored = drafts.some((d) => d.restored);
 
   const load = useCallback(async () => {
@@ -37,6 +38,7 @@ export default function StudentDetail() {
       const fill = (field, draft, value) => { if (!hasDraft(`${k}${field}`)) draft.reset(value); };
       fill('number', numberDraft, s.student_number);
       fill('name', nameDraft, s.name);
+      fill('email', emailDraft, s.email ?? '');
       fill('device', deviceDraft, String(s.device_id));
       fill('course', courseDraft, s.course_name ?? '');
       fill('modules', modulesDraft, new Set((s.modules ?? []).map((m) => m.id)));
@@ -56,7 +58,7 @@ export default function StudentDetail() {
 
   const handleSave = async () => {
     try {
-      await api.updateStudent(id, studentNumber, name, Number(deviceId), courseName);
+      await api.updateStudent(id, studentNumber, name, Number(deviceId), courseName, email);
       await api.setStudentModules(id, [...moduleIds]);
       toast.success('Student updated');
       clearDrafts(k);
@@ -101,6 +103,11 @@ export default function StudentDetail() {
           <div className="space-y-2">
             <label className="text-sm font-medium">Full Name</label>
             <Input value={name} onChange={(e) => setName(e.target.value)} />
+          </div>
+          <div className="space-y-2">
+            <label htmlFor="student-email" className="text-sm font-medium">Email</label>
+            <Input id="student-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder={`${studentNumber}@tut4life.ac.za`} />
+            <p className="text-xs text-muted-foreground">Exam bookings, changes and cancellations are emailed here.</p>
           </div>
           <div className="space-y-2">
             <label htmlFor="student-course" className="text-sm font-medium">Course</label>

@@ -43,6 +43,7 @@ export default function Enroll() {
   // Form State
   const [studentNumber, setStudentNumber] = useDraft('enroll:number', '');
   const [name, setName] = useDraft('enroll:name', '');
+  const [email, setEmail] = useDraft('enroll:email', ''); // exam emails go here
   const [courseName, setCourseName] = useDraft('enroll:course', '');
   const [venueId, setVenueId] = useDraft('enroll:venue', '');
   const [deviceId, setDeviceId] = useDraft('enroll:device', '');
@@ -136,6 +137,7 @@ export default function Enroll() {
     const newErrors = {};
     if (!studentNumber.trim()) newErrors.studentNumber = 'Student number is required';
     if (!name.trim()) newErrors.name = 'Full name is required';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) newErrors.email = 'A valid email address is required (exam emails are sent to it)';
     if (!venueId) newErrors.venueId = 'Please select a venue';
     if (!deviceId) newErrors.deviceId = 'Please select a device';
     if (!consent) newErrors.consent = 'Consent is required to proceed';
@@ -150,7 +152,7 @@ export default function Enroll() {
 
     setLoading(true);
     try {
-      const created = await api.createStudent(studentNumber.trim(), name.trim(), Number(deviceId), courseName.trim());
+      const created = await api.createStudent(studentNumber.trim(), name.trim(), Number(deviceId), courseName.trim(), email.trim());
       setCreatedId(created.id);
       setStartedAt(Date.now());
       setFailReason('');
@@ -209,6 +211,7 @@ export default function Enroll() {
     setStep(1);
     setStudentNumber('');
     setName('');
+    setEmail('');
     setCourseName('');
     setVenueId('');
     setDeviceId('');
@@ -269,6 +272,28 @@ export default function Enroll() {
                         <AlertCircle size={12} /> {errors.name}
                       </p>
                     )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <label htmlFor="student-email" className="text-sm font-medium">Email</label>
+                    <Input
+                      id="student-email" type="email" autoComplete="off"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder={studentNumber.trim() ? `${studentNumber.trim()}@tut4life.ac.za` : 'e.g. 222138469@tut4life.ac.za'}
+                      className={errors.email ? 'border-red-500' : ''}
+                    />
+                    {studentNumber.trim() && !email.trim() && (
+                      <button type="button" className="text-xs font-medium text-primary hover:underline" onClick={() => setEmail(`${studentNumber.trim()}@tut4life.ac.za`)}>
+                        Use {studentNumber.trim()}@tut4life.ac.za
+                      </button>
+                    )}
+                    {errors.email && (
+                      <p className="text-xs text-red-500 flex items-center gap-1">
+                        <AlertCircle size={12} /> {errors.email}
+                      </p>
+                    )}
+                    <p className="text-xs text-muted-foreground">Exam bookings, changes and cancellations are emailed here.</p>
                   </div>
 
                   <div className="space-y-2">

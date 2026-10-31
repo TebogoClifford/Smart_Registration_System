@@ -17,8 +17,8 @@ const allNavItems = [
     tabs: [{ path: '/students', label: 'Student list' }, { path: '/enroll', label: 'Enrolment' }, { path: '/modules', label: 'Modules' }],
   },
   {
-    path: '/bookings', label: 'Exam', icon: CalendarCheck, match: ['/bookings', '/calendar'],
-    tabs: [{ path: '/bookings', label: 'Exam bookings' }, { path: '/calendar', label: 'Exam calendar' }],
+    path: '/bookings', label: 'Exam', icon: CalendarCheck, match: ['/bookings', '/calendar', '/emails'],
+    tabs: [{ path: '/bookings', label: 'Exam bookings' }, { path: '/calendar', label: 'Exam calendar' }, { path: '/emails', label: 'Email log' }],
   },
   { path: '/users', label: 'Accounts', icon: KeyRound, adminOnly: true, match: ['/users'] },
   { path: '/account', label: 'My account', icon: UserCog, match: ['/account'] },

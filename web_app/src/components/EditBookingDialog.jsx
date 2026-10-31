@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { api } from '@/lib/api';
 import ExamDatePicker from '@/components/ExamDatePicker';
+import { emailNote } from '@/lib/exams';
 
 const SLOTS = [{ value: '09:00', label: '09:00 session' }, { value: '13:00', label: '13:00 session' }];
 
@@ -49,7 +50,7 @@ export default function EditBookingDialog({ booking, venues, onClose: close, onS
     setSaving(true);
     try {
       const row = await api.updateBooking(booking.id, Number(venueId), date, slot);
-      toast.success(`${booking.module_code} moved to ${row.venue_name}, ${row.exam_date} ${row.slot} · ${row.seats} seats`);
+      toast.success(`${booking.module_code} moved to ${row.venue_name}, ${row.exam_date} ${row.slot} · ${row.seats} seats`, { description: emailNote(row.emails) || undefined });
       clearDrafts(k);
       onSaved(row);
     } catch (err) {

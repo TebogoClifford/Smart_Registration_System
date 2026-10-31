@@ -48,10 +48,11 @@ const api = {
     });
     return response.data;
   },
-  async createStudent(studentNumber, name, deviceId, courseName = '') {
+  async createStudent(studentNumber, name, deviceId, courseName = '', email = '') {
     const response = await http.post(`/api/students`, {
       student_number: studentNumber,
       name,
+      email,
       device_id: deviceId,
       course_name: courseName,
     });
@@ -104,10 +105,11 @@ const api = {
     const response = await http.delete(`/api/devices/${id}`);
     return response.data;
   },
-  async updateStudent(id, studentNumber, name, deviceId, courseName = '') {
+  async updateStudent(id, studentNumber, name, deviceId, courseName = '', email = '') {
     const response = await http.put(`/api/students/${id}`, {
       student_number: studentNumber,
       name,
+      email,
       device_id: deviceId,
       course_name: courseName,
     });
@@ -164,6 +166,10 @@ const api = {
   async cancelBooking(id) { return (await http.delete(`/api/bookings/${id}`)).data; },
   // move a booking to another hall / day / session; the module's students are seated again
   async updateBooking(id, venueId, date, slot) { return (await http.put(`/api/bookings/${id}`, { venueId, date, slot })).data; },
+  // ---- exam emails to students (the Email log)
+  async getEmails(params = {}) { return (await http.get('/api/emails', { params })).data; },
+  async getEmailStatus() { return (await http.get('/api/emails/status')).data; },
+  async retryEmails() { return (await http.post('/api/emails/retry')).data; },
   // ---- courses, recognitions and enrolment photos
   async getCourses() { return (await http.get('/api/courses')).data; },
   async getRecognitions(limit = 8) { return (await http.get('/api/access-events/recognitions', { params: { limit } })).data; },

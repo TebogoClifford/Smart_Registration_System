@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import ConfirmDeleteDialog from '@/components/ConfirmDeleteDialog';
 import EditBookingDialog from '@/components/EditBookingDialog';
 import ExamDatePicker from '@/components/ExamDatePicker';
-import { parseDate } from '@/lib/exams';
+import { parseDate, emailNote } from '@/lib/exams';
 import { api } from '@/lib/api';
 import { useDraft } from '@/lib/drafts';
 
@@ -72,7 +72,7 @@ export default function Bookings() {
     setSaving(true);
     try {
       const b = await api.createBooking(Number(moduleId), Number(venueId), date, slot);
-      toast.success(`${b.module_code} booked: ${b.seats} seats reserved, ${b.remaining} left in ${b.venue_name}`);
+      toast.success(`${b.module_code} booked: ${b.seats} seats reserved, ${b.remaining} left in ${b.venue_name}`, { description: emailNote(b.emails) || undefined });
       if (b.notReadyAtVenue?.length) {
         toast.warning(`${b.notReadyAtVenue.length} seated student(s) are not enrolled on a device at this venue yet and will be refused at the door.`, { duration: 10000 });
       }
@@ -82,7 +82,7 @@ export default function Bookings() {
   };
 
   const cancel = async (id) => {
-    try { await api.cancelBooking(id); toast.success('Booking cancelled, seats freed'); setExpanded(null); loadAll(); loadAvail(); } catch (err) { toast.error(err.message); }
+    try { const r = await api.cancelBooking(id); toast.success('Booking cancelled, seats freed', { description: emailNote(r?.emails) || undefined }); setExpanded(null); loadAll(); loadAvail(); } catch (err) { toast.error(err.message); }
   };
 
   const toggleSeats = async (id) => {

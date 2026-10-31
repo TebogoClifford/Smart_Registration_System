@@ -7,7 +7,7 @@ const { COURSES, checkCourse } = require('../courses');
 
 // Explicit field list: never load the enrolment photo (bytes) here; has_image says whether there is one.
 const STUDENT_SELECT = {
-  id: true, student_number: true, name: true, device_id: true, enrollment_status: true, enrollment_requested_at: true, course_name: true,
+  id: true, student_number: true, name: true, email: true, device_id: true, enrollment_status: true, enrollment_requested_at: true, course_name: true,
   student_modules: { select: { modules: { select: { id: true, code: true, name: true } } }, orderBy: { modules: { code: 'asc' } } },
 };
 const shape = ({ student_modules: sm, ...s }, withImage) => ({ ...s, has_image: withImage.has(s.id), modules: sm.map((x) => x.modules) });
@@ -23,6 +23,11 @@ async function getStudent(id) {
 const studentDevice = (id) => prisma.students.findUnique({ where: { id: Number(id) }, select: { id: true, devices: { select: { api_key: true } } } });
 
 const BAD_COURSE = `course_name must be one of: ${COURSES.join('; ')}`;
+// Every student has an email address (exam emails are sent to it).
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const cleanEmail = (e) => String(e ?? '').trim().toLowerCase();
+const BAD_EMAIL = 'email is required and must be a valid address, e.g. 222138469@tut4life.ac.za';
+const badEmail = (e) => !EMAIL_RE.test(e) || e.length > 255;
 
 router.param('id', validateIdParam);
 
@@ -36,6 +41,8 @@ router.post('/', async (req, res) => {
       .json({ error: 'student_number, name, and device_id are required' });
   }
   if (course_name === undefined) return res.status(400).json({ error: BAD_COURSE });
+  const email = cleanEmail(req.body?.email);
+  if (badEmail(email)) return res.status(400).json({ error: BAD_EMAIL });
   if (!isId(device_id)) return res.status(400).json({ error: 'device_id must be a positive integer' });
   try {
     // Same student enrolled twice on the same device would give two embeddings for one person.
@@ -45,7 +52,7 @@ router.post('/', async (req, res) => {
     }
     const created = await prisma.students.create({
       data: {
-        student_number: String(student_number), name: String(name), device_id: Number(device_id), course_name,
+        student_number: String(student_number), name: String(name), email, device_id: Number(device_id), course_name,
         enrollment_status: 'pending', enrollment_requested_at: new Date(),
       },
       select: { id: true },
@@ -88,6 +95,8 @@ router.put('/:id', async (req, res) => {
     return res.status(400).json({ error: 'student_number, name, and device_id are required' });
   }
   if (!isId(device_id)) return res.status(400).json({ error: 'device_id must be a positive integer' });
+  const email = cleanEmail(req.body?.email);
+  if (badEmail(email)) return res.status(400).json({ error: BAD_EMAIL });
   try {
     // a course saved before the list existed may stay as it is
     const current = await prisma.students.findUnique({ where: { id: Number(id) }, select: { course_name: true } });
@@ -101,7 +110,7 @@ router.put('/:id', async (req, res) => {
     }
     const { count } = await prisma.students.updateMany({
       where: { id: Number(id) },
-      data: { student_number: String(student_number), name: String(name), device_id: Number(device_id), course_name },
+      data: { student_number: String(student_number), name: String(name), email, device_id: Number(device_id), course_name },
     });
     if (count === 0) return res.status(404).json({ error: 'student not found' });
     res.json(await getStudent(id));

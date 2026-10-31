@@ -38,3 +38,14 @@ export function groupSittings(bookings) {
   }
   return [...map.values()].sort((a, b) => a.date.localeCompare(b.date) || a.slot.localeCompare(b.slot) || a.venueName.localeCompare(b.venueName));
 }
+
+// What a booking change did about student emails, for the confirmation message
+// (`emails` is the server's { queued, mode, testTo } after booking, moving or cancelling an exam).
+export function emailNote(emails) {
+  const n = emails?.queued ?? 0;
+  if (!n) return '';
+  const who = `${n} student${n === 1 ? '' : 's'}`;
+  if (emails.mode === 'live') return `Emailing ${who}.`;
+  if (emails.mode === 'test') return `Emails to ${who} are in the Email log; test mode only sends to ${emails.testTo?.join(', ') || 'the test addresses'}.`;
+  return `Emails to ${who} are in the Email log (sending is not set up yet).`;
+}

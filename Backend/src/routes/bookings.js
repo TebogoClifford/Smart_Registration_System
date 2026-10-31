@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const prisma = require('../db');
 const { validateIdParam, isId, handleDbError, toDbDate, fromDbDate } = require('../http');
+const { queueExamEmails, emailStatus } = require('../email');
 const { SLOTS, isValidDate, sessionAt, HttpError, availability, assignSeats, failIfProblems, lockSession, inTransaction } = require('../bookings');
 
 router.param('id', validateIdParam);
@@ -198,9 +199,30 @@ router.post('/', async (req, res) => {
       return { booking, notReady };
     });
     const [row] = await listBookings({ id: out.booking.id });
-    res.status(201).json({ ...row, notReadyAtVenue: out.notReady });
+    const emails = await emailStudents('booked', row);
+    res.status(201).json({ ...row, notReadyAtVenue: out.notReady, emails });
   } catch (err) { handleDbError(res, err); }
 });
+
+// The booking's seated students with their email and seat number (for the exam emails).
+const seatedStudents = async (bookingId) => (await prisma.seat_reservations.findMany({
+  where: { booking_id: bookingId },
+  select: { seat_number: true, students: { select: { id: true, name: true, email: true } } },
+  orderBy: { seat_number: 'asc' },
+})).map((r) => ({ ...r.students, seat: r.seat_number }));
+
+// Email every student of the exam (row = a listBookings row). Email trouble never fails the booking:
+// the emails are recorded and sent in the background (see email.js and the Email log page).
+async function emailStudents(kind, row, previous, students) {
+  try {
+    const exam = { code: row.module_code, name: row.module_name, date: row.exam_date, slot: row.slot, venueName: row.venue_name, previous };
+    const queued = await queueExamEmails(prisma, kind, row.id, exam, students ?? await seatedStudents(row.id));
+    return { queued, ...emailStatus() };
+  } catch (err) {
+    console.error(`Could not record ${kind} emails for booking ${row.id}:`, err.message);
+    return { queued: 0, error: 'The emails could not be recorded' };
+  }
+}
 
 // PUT /api/bookings/:id  { venueId, date, slot } — move a booking to another hall, day or session.
 // Every student of the module is seated again in the new place; if they do not fit, or a student
@@ -212,8 +234,10 @@ router.put('/:id', async (req, res) => {
   if (!SLOTS.includes(slot)) return res.status(400).json({ error: `slot must be one of ${SLOTS.join(', ')}` });
   const id = Number(req.params.id), vId = Number(venueId);
   try {
-    await inTransaction(prisma, async (tx) => {
-      const b = await tx.exam_bookings.findUnique({ where: { id }, select: { id: true, module_id: true, modules: { select: { code: true } } } });
+    const previous = await inTransaction(prisma, async (tx) => {
+      const b = await tx.exam_bookings.findUnique({
+        where: { id }, select: { id: true, module_id: true, exam_date: true, slot: true, modules: { select: { code: true } }, venues: { select: { name: true } } },
+      });
       if (!b) throw new HttpError(404, 'booking not found');
       const ven = await tx.venues.findUnique({ where: { id: vId }, select: { id: true, name: true, capacity: true } });
       if (!ven) throw new HttpError(404, 'venue not found');
@@ -225,18 +249,25 @@ router.put('/:id', async (req, res) => {
       await tx.seat_reservations.deleteMany({ where: { booking_id: id } });
       await tx.exam_bookings.update({ where: { id }, data: { venue_id: vId, exam_date: toDbDate(date), slot } });
       failIfProblems(await assignSeats(tx, { id, module_id: b.module_id, venue_id: vId, exam_date: date, slot }), ven.name);
+      return { date: fromDbDate(b.exam_date), slot: b.slot, venueName: b.venues.name };
     });
     const [row] = await listBookings({ id });
-    res.json(row);
+    const changed = previous.date !== row.exam_date || previous.slot !== row.slot || previous.venueName !== row.venue_name;
+    res.json({ ...row, emails: changed ? await emailStudents('moved', row, previous) : { queued: 0 } });
   } catch (err) { handleDbError(res, err); }
 });
 
-// DELETE /api/bookings/:id — cancel; the seats are freed
+// DELETE /api/bookings/:id — cancel; the seats are freed and the students are told
 router.delete('/:id', async (req, res) => {
+  const id = Number(req.params.id);
   try {
-    const { count } = await prisma.exam_bookings.deleteMany({ where: { id: Number(req.params.id) } });
+    const [row] = await listBookings({ id });
+    if (!row) return res.status(404).json({ error: 'booking not found' });
+    const students = await seatedStudents(id); // before the seats disappear with the booking
+    const { count } = await prisma.exam_bookings.deleteMany({ where: { id } });
     if (count === 0) return res.status(404).json({ error: 'booking not found' });
-    res.status(204).send();
+    const emails = await emailStudents('cancelled', row, undefined, students);
+    res.status(200).json({ cancelled: true, emails });
   } catch (err) { handleDbError(res, err); }
 });
 

@@ -107,7 +107,9 @@ model students {
   enrollment_requested_at DateTime?           @default(now()) @db.Timestamptz(6)
   enrollment_image_type   String?             @db.VarChar(30)
   course_name             String?             @db.VarChar(100)
+  email                   String?             @db.VarChar(255)
   access_events           access_events[]
+  email_outbox            email_outbox[]
   seat_reservations       seat_reservations[]
   student_modules         student_modules[]
   devices                 devices?            @relation(fields: [device_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
@@ -136,4 +138,26 @@ model venues {
   capacity      Int             @default(0)
   devices       devices[]
   exam_bookings exam_bookings[]
+}
+
+/// Emails to students about their exams; one row per email with what happened to it (see src/email.js).
+model email_outbox {
+  id          Int       @id @default(autoincrement())
+  kind        String    @db.VarChar(20)
+  booking_id  Int?
+  student_id  Int?
+  to_email    String    @db.VarChar(255)
+  to_name     String    @db.VarChar(100)
+  subject     String    @db.VarChar(255)
+  body_text   String
+  body_html   String
+  status      String    @default("queued") @db.VarChar(20)
+  error       String?
+  provider_id String?   @db.VarChar(255)
+  created_at  DateTime  @default(now()) @db.Timestamptz(6)
+  sent_at     DateTime? @db.Timestamptz(6)
+  students    students? @relation(fields: [student_id], references: [id], onUpdate: NoAction)
+
+  @@index([created_at(sort: Desc)], map: "idx_email_outbox_created")
+  @@index([status], map: "idx_email_outbox_status")
 }

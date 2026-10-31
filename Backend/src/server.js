@@ -15,6 +15,8 @@ const authRouter = require('./routes/auth');
 const usersRouter = require('./routes/users');
 const modulesRouter = require('./routes/modules');
 const bookingsRouter = require('./routes/bookings');
+const emailsRouter = require('./routes/emails');
+const { emailStatus, processOutbox } = require('./email');
 
 const app = express();
 app.set('trust proxy', 1); // Render sits behind a proxy; this makes req.ip the real client address
@@ -43,6 +45,7 @@ app.use('/api/students', studentsRouter);
 app.use('/api/access-events', accessEventsRouter);
 app.use('/api/modules', modulesRouter);
 app.use('/api/bookings', bookingsRouter);
+app.use('/api/emails', emailsRouter);
 app.use('/api/stats', statsRouter);
 
 // Unknown routes -> JSON 404; unexpected errors (e.g. malformed JSON body) -> JSON, never an HTML stack trace
@@ -73,6 +76,10 @@ async function start() {
   const server = app.listen(PORT, (err) => {
     if (err) { console.error(`Could not listen on port ${PORT}:`, err.message); process.exit(1); }
     console.log(`Backend listening on port ${PORT}`);
+    const mail = emailStatus();
+    console.log(`Exam emails: ${mail.mode === 'log' ? 'not set up (recorded only)' : mail.mode === 'test' ? `TEST MODE, only to ${mail.testTo.join(', ') || 'nobody'}` : 'live'}`);
+    // emails still waiting from before a restart
+    processOutbox(prisma).catch((e) => console.error('Email sending failed:', e.message));
   });
   server.on('error', (err) => { console.error('Server error:', err.message); process.exit(1); });
 }

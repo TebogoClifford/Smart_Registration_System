@@ -119,7 +119,7 @@ async function main() {
       let s = byNumber.get(number);
       if (!s) {
         s = await must(`student ${number}`, call('POST', '/api/students', {
-          student_number: number, name: `${FIRST[n % FIRST.length]} ${LAST[(n * 7) % LAST.length]}`,
+          student_number: number, name: `${FIRST[n % FIRST.length]} ${LAST[(n * 7) % LAST.length]}`, email: `${number}@tut4life.ac.za`,
           device_id: devices[n % devices.length].id, course_name: course,
         }));
         added++;

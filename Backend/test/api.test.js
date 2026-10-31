@@ -85,17 +85,17 @@ test('device: heartbeat marks device active', async () => {
 
 // ---------- students ----------
 test('student: create pending', async () => {
-  const r = await call('POST', '/api/students', { student_number: '220000001', name: 'Test Student', device_id: ctx.device.id });
+  const r = await call('POST', '/api/students', { email: 'student@example.com', student_number: '220000001', name: 'Test Student', device_id: ctx.device.id });
   assert.strictEqual(r.status, 201);
   assert.strictEqual(r.json.enrollment_status, 'pending');
   ctx.student = r.json;
 });
 test('student: duplicate student_number -> 409, not 500', async () => {
-  const r = await call('POST', '/api/students', { student_number: '220000001', name: 'Dup', device_id: ctx.device.id });
+  const r = await call('POST', '/api/students', { email: 'student@example.com', student_number: '220000001', name: 'Dup', device_id: ctx.device.id });
   assert.strictEqual(r.status, 409, `got ${r.status}`);
 });
 test('student: non-existent device -> 4xx, not 500', async () => {
-  const r = await call('POST', '/api/students', { student_number: '220000002', name: 'X', device_id: 999999 });
+  const r = await call('POST', '/api/students', { email: 'student@example.com', student_number: '220000002', name: 'X', device_id: 999999 });
   assert.ok(r.status >= 400 && r.status < 500, `got ${r.status}`);
 });
 test('student: enrollment result needs the device key', async () => {

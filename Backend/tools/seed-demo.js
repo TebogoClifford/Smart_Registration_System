@@ -83,7 +83,7 @@ async function main() {
     const dev = devices[i % 5 === 0 ? 1 : i % 7 === 0 ? 2 : 0];
     const s = await must(`student ${i}`, call('POST', '/api/students', {
       student_number: String(220100000 + i * 37), name: `${FIRST[i % FIRST.length]} ${LAST[(i * 5) % LAST.length]}`,
-      device_id: dev.id, course_name: COURSES[i % 2],
+      email: `demo${i}@example.com`, device_id: dev.id, course_name: COURSES[i % 2],
     }));
     students.push({ ...s, dev });
     if (i < 34) await must('enrol', call('PUT', `/api/students/${s.id}/enrollment`, { status: 'enrolled' }, dkey(dev)));

@@ -25,7 +25,7 @@ test('setup: venues (small hall of 5, big hall of 40), device, 6 students', asyn
   assert.strictEqual(ctx.small.capacity, 5);
   ctx.device = (await call('POST', '/api/devices', { venue_id: ctx.big.id, name: `Cam ${tag}` })).json;
   for (let i = 1; i <= 6; i++) {
-    const r = await call('POST', '/api/students', { student_number: `${tag}${i}`, name: `Student ${i}`, device_id: ctx.device.id, course_name: IT });
+    const r = await call('POST', '/api/students', { email: 'student@example.com', student_number: `${tag}${i}`, name: `Student ${i}`, device_id: ctx.device.id, course_name: IT });
     assert.strictEqual(r.status, 201);
     assert.strictEqual(r.json.course_name, IT);
     assert.ok(!('enrollment_image' in r.json), 'photo bytes must never be returned');
@@ -37,11 +37,11 @@ test('setup: venues (small hall of 5, big hall of 40), device, 6 students', asyn
 test('courses: only courses from the list are accepted', async () => {
   const courses = (await call('GET', '/api/courses')).json;
   assert.ok(courses.includes(IT) && courses.length === 6);
-  const bad = await call('POST', '/api/students', { student_number: `${tag}X`, name: 'X', device_id: ctx.device.id, course_name: 'Diploma IT' });
+  const bad = await call('POST', '/api/students', { email: 'student@example.com', student_number: `${tag}X`, name: 'X', device_id: ctx.device.id, course_name: 'Diploma IT' });
   assert.strictEqual(bad.status, 400);
   assert.match(bad.json.error, /course_name must be one of/);
   const s = ctx.students[0];
-  const edit = (course_name) => call('PUT', `/api/students/${s.id}`, { student_number: s.student_number, name: s.name, device_id: ctx.device.id, course_name });
+  const edit = (course_name) => call('PUT', `/api/students/${s.id}`, { email: 'student@example.com', student_number: s.student_number, name: s.name, device_id: ctx.device.id, course_name });
   assert.strictEqual((await edit('Made-up course')).status, 400);
   assert.strictEqual((await edit(courses[0])).json.course_name, courses[0]);
   assert.strictEqual((await edit('')).json.course_name, null);
@@ -248,7 +248,7 @@ test('date availability: each day/session says whether a module fits in a hall, 
 });
 
 test('enrolling a student later in a booked module gives them the next free seat', async () => {
-  const late = (await call('POST', '/api/students', { student_number: `${tag}L`, name: 'Late', device_id: ctx.device.id })).json;
+  const late = (await call('POST', '/api/students', { email: 'student@example.com', student_number: `${tag}L`, name: 'Late', device_id: ctx.device.id })).json;
   assert.strictEqual((await call('PUT', `/api/students/${late.id}/modules`, { moduleIds: [ctx.modA.id] })).status, 200);
   const d = (await call('GET', `/api/bookings/${ctx.bookA.id}`)).json;
   assert.strictEqual(d.seats, 4);
@@ -276,9 +276,33 @@ test('venue capacity cannot drop below reserved seats; venue with bookings canno
   assert.strictEqual((await call('DELETE', `/api/venues/${ctx.small.id}`)).status, 409);
 });
 
+test('exam emails: booking, moving and cancelling each record one email per student', async () => {
+  const status = (await call('GET', '/api/emails/status')).json;
+  assert.strictEqual(status.mode, 'log'); // no Brevo key in tests: recorded, never sent
+  const { emails, counts } = (await call('GET', '/api/emails?limit=500')).json;
+  const of = (bookingId, kind) => emails.filter((e) => e.booking_id === bookingId && e.kind === kind);
+  // module A's booking seated students 1-3 (later 4 with the late student): one "booked" email each
+  const booked = of(ctx.bookA.id, 'booked');
+  assert.strictEqual(booked.length, 3);
+  assert.match(booked[0].subject, new RegExp(`^Exam scheduled: ${ctx.modA.code} Algorithms on ${DAY} at 09:00$`));
+  assert.match(booked[0].body_text, /Your seat number is \d+\./);
+  assert.ok(['queued', 'logged'].includes(booked[0].status));
+  assert.strictEqual(booked[0].to_email, 'student@example.com');
+  // module B was moved to the small hall and back: "moved" emails that name the old place
+  const moved = of(ctx.bookB.id, 'moved');
+  assert.ok(moved.length >= 2);
+  assert.ok(moved.some((e) => /Before: .* in Small /.test(e.body_text)));
+  assert.ok((counts.logged ?? 0) + (counts.queued ?? 0) >= booked.length);
+  assert.strictEqual((await call('GET', '/api/emails?status=nope')).status, 400);
+});
+
 test('module with bookings cannot be deleted; cancelling a booking frees seats', async () => {
   assert.strictEqual((await call('DELETE', `/api/modules/${ctx.modB.id}`)).status, 409);
-  assert.strictEqual((await call('DELETE', `/api/bookings/${ctx.bookB.id}`)).status, 204);
+  const cancel = await call('DELETE', `/api/bookings/${ctx.bookB.id}`);
+  assert.strictEqual(cancel.status, 200);
+  assert.strictEqual(cancel.json.emails.queued, 2); // students 4-5 are told
+  const { emails } = (await call('GET', '/api/emails?limit=50')).json;
+  assert.ok(emails.some((e) => e.booking_id === ctx.bookB.id && e.kind === 'cancelled' && /has been cancelled/.test(e.body_text)));
   assert.strictEqual((await call('GET', `/api/bookings/availability?venueId=${ctx.big.id}&date=${DAY}&slot=09:00`)).json.remaining, 37);
   assert.strictEqual((await call('DELETE', `/api/bookings/${ctx.bookB.id}`)).status, 404);
   assert.strictEqual((await call('DELETE', `/api/modules/${ctx.modB.id}`)).status, 204);
