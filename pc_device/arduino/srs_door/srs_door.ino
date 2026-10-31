@@ -187,6 +187,7 @@ void setup() {
   pinMode(ECHO_PIN, INPUT);
   Serial.begin(9600);
   Wire.begin();
+  Wire.setWireTimeout(3000, true);  // a stuck I2C bus (loose LCD wire) gives up after 3 ms instead of freezing the unit
   setupLcd();
   show("Smart Register", "Starting...");
   delay(800);

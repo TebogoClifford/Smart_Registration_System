@@ -113,6 +113,30 @@ class ArduinoLink(threading.Thread):
                 pass
             self.log("Arduino: disconnected")
 
+    def restart(self):
+        """Reset the Arduino, like its reset button: a pulse on DTR restarts the board (about 2 s).
+        Not connected but a port was used before: connect again, which restarts it too."""
+        if self.test and self.test["running"]:
+            self.log("Arduino: wait for the hardware test to finish before restarting")
+            return False
+        ser = self.ser
+        if not ser:
+            return bool(self.port) and self.connect(self.port)
+        try:
+            ser.dtr = False
+            time.sleep(0.1)
+            ser.dtr = True
+        except Exception as err:
+            self.error = f"restart failed: {err}"
+            self.log(f"Arduino: {self.error}")
+            return False
+        with self.lock:
+            self.buf = b""
+            self.firmware = self.lcd = self.distance = self.unit_state = None
+            self.status_at = self.gate_at = 0.0
+        self.log("Arduino: restarting (about 2 s)")
+        return True
+
     def send(self, text):
         ser = self.ser
         if not ser:

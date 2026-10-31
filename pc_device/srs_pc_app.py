@@ -653,17 +653,19 @@ class DoorWindow:
         self.dev_vals = value_grid(dev, [["Server"], ["Device", "Venue"], ["Last contact", "Faces on this PC"],
                                          ["Queued events", "Camera"]])
 
-        # the Arduino door unit: live values, port, Connect, and the hardware test
+        # the Arduino door unit: live values, port, Connect, Restart, and the hardware test
         hw = ttk.LabelFrame(left, text="Hardware (Arduino door unit)", style="Panel.TLabelframe", padding=10)
         hw.grid(row=1, column=0, sticky="ew", pady=(0, 8))
         self.hw_vals = value_grid(hw, [["Arduino", "Distance"], ["Door unit", "LCD"], ["Last message"]])
         hwrow = tk.Frame(hw, bg=PANEL)
         hwrow.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(8, 0))
-        self.port_pick = ttk.Combobox(hwrow, state="readonly", width=30)
+        self.port_pick = ttk.Combobox(hwrow, state="readonly", width=24)
         self.port_pick.pack(side="left")
         ttk.Button(hwrow, text="Ports", width=6, command=self._scan_ports).pack(side="left", padx=(4, 0))
         self.connect_btn = ttk.Button(hwrow, text="Connect", command=self._connect_toggle)
         self.connect_btn.pack(side="left", padx=4)
+        self.restart_btn = ttk.Button(hwrow, text="Restart", command=self.link.restart)
+        self.restart_btn.pack(side="left")
         tk.Button(hwrow, text="Test hardware", command=self._open_test, bg=INK, fg="white", activebackground=INK,
                   activeforeground="white", relief="flat", cursor="hand2", padx=10).pack(side="right")
         self._ports = []
@@ -889,6 +891,7 @@ class DoorWindow:
         age = hs["last_line_age"]
         put("Last message", f"{hs['last_line']} ({age:.0f} s)" if hs["last_line"] and age is not None else "—", INK if hs["last_line"] else MUTED)
         self.connect_btn.config(text="Disconnect" if hs["connected"] else "Connect")
+        self.restart_btn.state(["!disabled"] if hs["connected"] or self.link.port else ["disabled"])
         if self.test_win is not None:
             self._refresh_test(hs["test"])
 
