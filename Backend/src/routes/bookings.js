@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const prisma = require('../db');
 const { validateIdParam, isId, handleDbError, toDbDate, fromDbDate } = require('../http');
-const { SLOTS, isValidDate, HttpError, availability, assignSeats, failIfProblems, lockSession, inTransaction } = require('../bookings');
+const { SLOTS, isValidDate, sessionAt, HttpError, availability, assignSeats, failIfProblems, lockSession, inTransaction } = require('../bookings');
 
 router.param('id', validateIdParam);
 
@@ -23,6 +23,65 @@ router.get('/availability', async (req, res) => {
       orderBy: { modules: { code: 'asc' } },
     });
     res.json({ ...a, bookings: rows.map((b) => ({ id: b.id, code: b.modules.code, name: b.modules.name, seats: b._count.seat_reservations })) });
+  } catch (err) { handleDbError(res, err); }
+});
+
+// GET /api/bookings/date-availability?moduleId=&venueId=&from=&to=[&excludeBookingId=]
+// For a date picker: for every day in from..to (max 62 days) and both sessions, can this module sit
+// in this hall then? A day/session is unavailable when it is in the past, the hall has too few free
+// seats, some of the module's students already sit another exam then, or the module is already
+// booked then. excludeBookingId = the booking being moved (its own seats and slot count as free).
+router.get('/date-availability', async (req, res) => {
+  const { moduleId, venueId, from, to, excludeBookingId } = req.query;
+  if (!isId(moduleId) || !isId(venueId)) return res.status(400).json({ error: 'moduleId and venueId are required' });
+  if (!isValidDate(from) || !isValidDate(to) || from > to) return res.status(400).json({ error: 'from and to must be YYYY-MM-DD, from not after to' });
+  const days = Math.round((toDbDate(to) - toDbDate(from)) / 86400000) + 1;
+  if (days > 62) return res.status(400).json({ error: 'at most 62 days at a time' });
+  if (excludeBookingId !== undefined && !isId(excludeBookingId)) return res.status(400).json({ error: 'excludeBookingId must be a positive integer' });
+  const mId = Number(moduleId), vId = Number(venueId), skip = excludeBookingId ? Number(excludeBookingId) : null;
+  const range = { gte: toDbDate(from), lte: toDbDate(to) };
+  try {
+    const [venue, members, taken, ownBookings] = await Promise.all([
+      prisma.venues.findUnique({ where: { id: vId }, select: { name: true, capacity: true } }),
+      prisma.student_modules.findMany({ where: { module_id: mId }, select: { student_id: true } }),
+      prisma.seat_reservations.groupBy({
+        by: ['exam_date', 'slot'], where: { venue_id: vId, exam_date: range, ...(skip && { booking_id: { not: skip } }) }, _count: { _all: true },
+      }),
+      prisma.exam_bookings.findMany({ where: { module_id: mId, exam_date: range, ...(skip && { id: { not: skip } }) }, select: { exam_date: true, slot: true } }),
+    ]);
+    if (!venue) return res.status(404).json({ error: 'venue not found' });
+    const studentIds = members.map((m) => m.student_id);
+    // the module's students who already sit another exam, per day/session
+    const clashRows = studentIds.length ? await prisma.seat_reservations.groupBy({
+      by: ['exam_date', 'slot'],
+      where: { student_id: { in: studentIds }, exam_date: range, ...(skip && { booking_id: { not: skip } }) },
+      _count: { student_id: true },
+    }) : [];
+    const key = (d, s) => `${fromDbDate(d)}|${s}`;
+    const used = new Map(taken.map((g) => [key(g.exam_date, g.slot), g._count._all]));
+    const clashes = new Map(clashRows.map((g) => [key(g.exam_date, g.slot), g._count.student_id]));
+    const booked = new Set(ownBookings.map((b) => key(b.exam_date, b.slot)));
+    const today = sessionAt(new Date()).date;
+    const needed = studentIds.length;
+
+    const out = [];
+    for (let i = 0; i < days; i++) {
+      const date = fromDbDate(new Date(toDbDate(from).getTime() + i * 86400000));
+      const slots = {};
+      for (const slot of SLOTS) {
+        const k = `${date}|${slot}`;
+        const remaining = venue.capacity - (used.get(k) ?? 0);
+        const reason = date < today ? 'In the past'
+          : venue.capacity < 1 ? `${venue.name} has no seat count`
+            : booked.has(k) ? 'This module is already booked then'
+              : clashes.get(k) ? `${clashes.get(k)} student(s) already sit another exam then`
+                : remaining < needed ? `Not enough seats: ${remaining} free, ${needed} needed`
+                  : null;
+        slots[slot] = { ok: !reason, remaining, reason };
+      }
+      out.push({ date, slots });
+    }
+    res.json({ venueName: venue.name, capacity: venue.capacity, needed, days: out });
   } catch (err) { handleDbError(res, err); }
 });
 

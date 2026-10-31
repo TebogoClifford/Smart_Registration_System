@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { useDraft, clearDrafts } from '@/lib/drafts';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { api } from '@/lib/api';
+import ExamDatePicker from '@/components/ExamDatePicker';
 
 const SLOTS = [{ value: '09:00', label: '09:00 session' }, { value: '13:00', label: '13:00 session' }];
 
@@ -61,7 +61,7 @@ export default function EditBookingDialog({ booking, venues, onClose: close, onS
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <form role="dialog" aria-modal="true" aria-labelledby="edit-booking-title" onSubmit={save}
-        className="w-full max-w-md space-y-4 rounded-lg border bg-background p-6 shadow-lg">
+        className="max-h-[92vh] w-full max-w-lg space-y-4 overflow-y-auto rounded-lg border bg-background p-6 shadow-lg">
         <div>
           <h3 id="edit-booking-title" className="text-lg font-bold">Edit exam</h3>
           <p className="text-sm text-muted-foreground">
@@ -75,18 +75,17 @@ export default function EditBookingDialog({ booking, venues, onClose: close, onS
             <SelectContent>{venueItems.map((i) => <SelectItem key={i.value} value={i.value}>{i.label}</SelectItem>)}</SelectContent>
           </Select>
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1">
-            <label htmlFor="edit-booking-date" className="text-sm font-medium">Date</label>
-            <Input id="edit-booking-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
-          </div>
-          <div className="space-y-1">
-            <label className="text-sm font-medium">Session</label>
-            <Select value={slot} onValueChange={setSlot} items={SLOTS}>
-              <SelectTrigger aria-label="Session" className="w-full"><SelectValue /></SelectTrigger>
-              <SelectContent>{SLOTS.map((s) => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}</SelectContent>
-            </Select>
-          </div>
+        <div className="space-y-1">
+          <label className="text-sm font-medium">Session</label>
+          <Select value={slot} onValueChange={setSlot} items={SLOTS}>
+            <SelectTrigger aria-label="Session" className="w-full"><SelectValue /></SelectTrigger>
+            <SelectContent>{SLOTS.map((s) => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}</SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1">
+          <p className="text-sm font-medium">Date</p>
+          {/* this exam's own seats and slot count as free, so its current day is not shown as taken */}
+          <ExamDatePicker moduleId={booking.module_id} venueId={venueId} slot={slot} value={date} onChange={setDate} excludeBookingId={booking.id} />
         </div>
         <p aria-live="polite" className={`rounded-md border px-3 py-2 text-sm ${problem ? 'border-rose-200 bg-rose-50 text-rose-800' : 'bg-muted/40 text-muted-foreground'}`}>
           {unchanged ? 'Change the hall, date or session to move this exam.'

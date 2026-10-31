@@ -3,12 +3,13 @@ import { useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import ConfirmDeleteDialog from '@/components/ConfirmDeleteDialog';
 import EditBookingDialog from '@/components/EditBookingDialog';
+import ExamDatePicker from '@/components/ExamDatePicker';
+import { parseDate } from '@/lib/exams';
 import { api } from '@/lib/api';
 import { useDraft } from '@/lib/drafts';
 
@@ -97,8 +98,8 @@ export default function Bookings() {
       <Card>
         <CardHeader><CardTitle>Book an exam venue</CardTitle></CardHeader>
         <CardContent>
-          <form onSubmit={book} className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <form onSubmit={book} className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
+            <div className="min-w-0 space-y-4">
               <div className="min-w-0 space-y-1">
                 <label className="text-sm font-medium">Module</label>
                 <Select value={moduleId} onValueChange={setModuleId} items={moduleItems}>
@@ -114,17 +115,16 @@ export default function Bookings() {
                 </Select>
               </div>
               <div className="min-w-0 space-y-1">
-                <label htmlFor="exam-date" className="text-sm font-medium">Date</label>
-                <Input id="exam-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-              </div>
-              <div className="min-w-0 space-y-1">
                 <label className="text-sm font-medium">Session</label>
                 <Select value={slot} onValueChange={setSlot} items={SLOTS}>
                   <SelectTrigger aria-label="Session" className="w-full"><SelectValue /></SelectTrigger>
                   <SelectContent>{SLOTS.map((s) => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
-            </div>
+              <p className="text-sm">
+                <span className="font-medium">Date: </span>
+                {date ? parseDate(date).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) : <span className="text-muted-foreground">pick a day in the calendar</span>}
+              </p>
 
             <div className="rounded-md border bg-muted/40 p-4 text-sm" aria-live="polite">
               {!avail ? (
@@ -142,6 +142,12 @@ export default function Bookings() {
               )}
             </div>
             <Button type="submit" disabled={!canBook}>Book venue and reserve seats</Button>
+            </div>
+            {/* which days work for this module, hall and session */}
+            <div className="min-w-0">
+              <p className="mb-2 text-sm font-medium">Date</p>
+              <ExamDatePicker moduleId={moduleId} venueId={venueId} slot={slot} value={date} onChange={setDate} />
+            </div>
           </form>
         </CardContent>
       </Card>

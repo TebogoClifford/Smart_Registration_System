@@ -220,6 +220,33 @@ test('a booking can be moved to another hall/day/session; students are seated ag
   assert.deepStrictEqual((await call('GET', `/api/bookings/${id}`)).json.seatList.map((s) => s.seat_number), [4, 5]);
 });
 
+test('date availability: each day/session says whether a module fits in a hall, and why not', async () => {
+  const q = (params) => call('GET', `/api/bookings/date-availability?${new URLSearchParams(params)}`);
+  const next = '2031-03-05';
+  // module A (students 1-3) in the big hall on DAY and the day after
+  let r = (await q({ moduleId: ctx.modA.id, venueId: ctx.big.id, from: DAY, to: next })).json;
+  assert.strictEqual(r.needed, 3);
+  const [day, after] = r.days;
+  assert.strictEqual(day.date, DAY);
+  assert.match(day.slots['09:00'].reason, /already booked/);           // A itself is booked then
+  assert.match(day.slots['13:00'].reason, /already sit another exam/); // students 1-3 sit module C then
+  assert.strictEqual(after.slots['09:00'].ok, true);
+  assert.strictEqual(after.slots['09:00'].remaining, 40);
+  // moving A's own booking: its slot and seats count as free
+  r = (await q({ moduleId: ctx.modA.id, venueId: ctx.big.id, from: DAY, to: DAY, excludeBookingId: ctx.bookA.id })).json;
+  assert.strictEqual(r.days[0].slots['09:00'].ok, true, JSON.stringify(r.days[0]));
+  // module C (6 students) never fits the 5-seat hall
+  r = (await q({ moduleId: ctx.modC.id, venueId: ctx.small.id, from: next, to: next })).json;
+  assert.match(r.days[0].slots['09:00'].reason, /Not enough seats: 5 free, 6 needed/);
+  // the past is never available
+  r = (await q({ moduleId: ctx.modA.id, venueId: ctx.big.id, from: '2020-01-01', to: '2020-01-01' })).json;
+  assert.strictEqual(r.days[0].slots['09:00'].reason, 'In the past');
+  // validation
+  assert.strictEqual((await q({ venueId: ctx.big.id, from: DAY, to: DAY })).status, 400);
+  assert.strictEqual((await q({ moduleId: ctx.modA.id, venueId: ctx.big.id, from: '2031-01-01', to: '2031-04-01' })).status, 400);
+  assert.strictEqual((await q({ moduleId: ctx.modA.id, venueId: ctx.big.id, from: next, to: DAY })).status, 400);
+});
+
 test('enrolling a student later in a booked module gives them the next free seat', async () => {
   const late = (await call('POST', '/api/students', { student_number: `${tag}L`, name: 'Late', device_id: ctx.device.id })).json;
   assert.strictEqual((await call('PUT', `/api/students/${late.id}/modules`, { moduleIds: [ctx.modA.id] })).status, 200);

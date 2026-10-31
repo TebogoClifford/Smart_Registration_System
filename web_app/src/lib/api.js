@@ -157,6 +157,8 @@ const api = {
   async setStudentModules(studentId, moduleIds) { return (await http.put(`/api/students/${studentId}/modules`, { moduleIds })).data; },
   async getBookings(params = {}) { return (await http.get('/api/bookings', { params })).data; },
   async getBooking(id) { return (await http.get(`/api/bookings/${id}`)).data; },
+  // per day and session in a date range: can this module sit in this hall then (and why not)
+  async getDateAvailability(params) { return (await http.get('/api/bookings/date-availability', { params })).data; },
   async getAvailability(venueId, date, slot) { return (await http.get('/api/bookings/availability', { params: { venueId, date, slot } })).data; },
   async createBooking(moduleId, venueId, date, slot) { return (await http.post('/api/bookings', { moduleId, venueId, date, slot })).data; },
   async cancelBooking(id) { return (await http.delete(`/api/bookings/${id}`)).data; },
