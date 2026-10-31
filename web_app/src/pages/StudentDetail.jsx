@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import ConfirmDeleteDialog from '@/components/ConfirmDeleteDialog';
 import CourseSelect from '@/components/CourseSelect';
+import StudentEnrolment from '@/components/StudentEnrolment';
 import { api } from '@/lib/api';
 import { ArrowLeft } from 'lucide-react';
 
@@ -67,9 +68,12 @@ export default function StudentDetail() {
 
   return (
     <div className="space-y-6">
-      <Button variant="ghost" size="sm" onClick={() => navigate('/students')} className="gap-2">
+      {/* back to the list as it was (search and filters kept) when we came from it */}
+      <Button variant="ghost" size="sm" onClick={() => (window.history.length > 1 ? navigate(-1) : navigate('/students'))} className="gap-2">
         <ArrowLeft size={16} /> Back to Students
       </Button>
+
+      <StudentEnrolment student={student} device={devices.find((d) => d.id === student.device_id)} onStudentChange={setStudent} />
 
       <Card>
         <CardHeader>
