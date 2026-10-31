@@ -1,8 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const prisma = require('../db');
-const { validateIdParam, isId, handleDbError, pgCode } = require('../http');
+const { validateIdParam, isId, handleDbError, pgCode, toDbDate } = require('../http');
 const { requireDevice } = require('../deviceAuth');
+const { sessionAt } = require('../bookings');
 
 router.param('id', validateIdParam);
 
@@ -141,6 +142,49 @@ router.get('/', async (req, res) => {
       id: e.id, deviceId: e.device_id, studentId: e.student_id, decision: e.decision, timestamp: e.event_time,
       overridden: e._count.event_overrides > 0,
     })));
+  } catch (err) {
+    handleDbError(res, err);
+  }
+});
+
+// GET /api/access-events/recognitions?limit=8 — the latest recognised students, newest first, for the
+// web console's "Recognised now" panel: who, at which device/hall, and their seat in the exam session
+// running when they were recognised (null when they have none then).
+router.get('/recognitions', async (req, res) => {
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 8, 1), 50);
+  try {
+    const events = await prisma.access_events.findMany({
+      where: { student_id: { not: null } },
+      select: {
+        id: true, decision: true, event_time: true,
+        devices: { select: { id: true, name: true, venues: { select: { id: true, name: true } } } },
+        students: { select: { id: true, student_number: true, name: true, course_name: true, enrollment_image_type: true } },
+      },
+      orderBy: [{ event_time: 'desc' }, { id: 'desc' }],
+      take: limit,
+    });
+    const out = [];
+    for (const e of events) {
+      const { date, slot } = sessionAt(e.event_time ?? new Date());
+      const seat = await prisma.seat_reservations.findFirst({
+        where: { student_id: e.students.id, exam_date: toDbDate(date), slot },
+        select: { seat_number: true, venue_id: true, exam_bookings: { select: { modules: { select: { code: true, name: true } }, venues: { select: { name: true } } } } },
+      });
+      out.push({
+        id: e.id, decision: e.decision, timestamp: e.event_time,
+        device: { id: e.devices.id, name: e.devices.name }, venue: e.devices.venues,
+        student: {
+          id: e.students.id, studentNumber: e.students.student_number, name: e.students.name,
+          course: e.students.course_name, hasPhoto: !!e.students.enrollment_image_type,
+        },
+        session: { date, slot },
+        seat: seat && {
+          number: seat.seat_number, moduleCode: seat.exam_bookings.modules.code, moduleName: seat.exam_bookings.modules.name,
+          venueName: seat.exam_bookings.venues.name, inThisVenue: seat.venue_id === e.devices.venues.id,
+        },
+      });
+    }
+    res.json(out);
   } catch (err) {
     handleDbError(res, err);
   }

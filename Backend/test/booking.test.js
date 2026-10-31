@@ -17,6 +17,7 @@ const tag = Date.now().toString(36).toUpperCase();
 const ctx = { students: [] };
 const DAY = '2031-03-04';
 const dkey = () => ({ 'X-Device-Key': ctx.device.api_key });
+const IT = 'National Diploma: Information Technology';
 
 test('setup: venues (small hall of 5, big hall of 40), device, 6 students', async () => {
   ctx.small = (await call('POST', '/api/venues', { name: `Small ${tag}`, capacity: 5 })).json;
@@ -24,13 +25,44 @@ test('setup: venues (small hall of 5, big hall of 40), device, 6 students', asyn
   assert.strictEqual(ctx.small.capacity, 5);
   ctx.device = (await call('POST', '/api/devices', { venue_id: ctx.big.id, name: `Cam ${tag}` })).json;
   for (let i = 1; i <= 6; i++) {
-    const r = await call('POST', '/api/students', { student_number: `${tag}${i}`, name: `Student ${i}`, device_id: ctx.device.id, course_name: 'Diploma IT' });
+    const r = await call('POST', '/api/students', { student_number: `${tag}${i}`, name: `Student ${i}`, device_id: ctx.device.id, course_name: IT });
     assert.strictEqual(r.status, 201);
-    assert.strictEqual(r.json.course_name, 'Diploma IT');
+    assert.strictEqual(r.json.course_name, IT);
     assert.ok(!('enrollment_image' in r.json), 'photo bytes must never be returned');
     assert.strictEqual(r.json.has_image, false);
     ctx.students.push(r.json);
   }
+});
+
+test('courses: only courses from the list are accepted', async () => {
+  const courses = (await call('GET', '/api/courses')).json;
+  assert.ok(courses.includes(IT) && courses.length === 6);
+  const bad = await call('POST', '/api/students', { student_number: `${tag}X`, name: 'X', device_id: ctx.device.id, course_name: 'Diploma IT' });
+  assert.strictEqual(bad.status, 400);
+  assert.match(bad.json.error, /course_name must be one of/);
+  const s = ctx.students[0];
+  const edit = (course_name) => call('PUT', `/api/students/${s.id}`, { student_number: s.student_number, name: s.name, device_id: ctx.device.id, course_name });
+  assert.strictEqual((await edit('Made-up course')).status, 400);
+  assert.strictEqual((await edit(courses[0])).json.course_name, courses[0]);
+  assert.strictEqual((await edit('')).json.course_name, null);
+  assert.strictEqual((await edit(IT)).json.course_name, IT);
+});
+
+test('recognitions: latest recognised students with details, newest first', async () => {
+  const [a, b] = ctx.students;
+  for (const s of [a, b]) {
+    assert.strictEqual((await call('POST', '/api/access-events', { deviceId: ctx.device.id, decision: 'granted', studentId: s.id }, dkey())).status, 201);
+  }
+  await call('POST', '/api/access-events', { deviceId: ctx.device.id, decision: 'denied' }, dkey()); // unknown face: not listed
+  const list = (await call('GET', '/api/access-events/recognitions?limit=2')).json;
+  assert.strictEqual(list.length, 2);
+  assert.strictEqual(list[0].student.id, b.id);
+  assert.strictEqual(list[1].student.id, a.id);
+  assert.strictEqual(list[0].student.course, IT);
+  assert.strictEqual(list[0].device.id, ctx.device.id);
+  assert.strictEqual(list[0].venue.id, ctx.big.id);
+  assert.strictEqual(list[0].seat, null); // no exam booked in the session running now
+  assert.match(list[0].session.slot, /^(09|13):00$/);
 });
 
 test('venue: capacity is required and must be a whole number 1..10000', async () => {

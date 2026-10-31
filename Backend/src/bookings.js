@@ -8,6 +8,15 @@ const { toDbDate } = require('./http');
 const SLOTS = ['09:00', '13:00'];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+// The exam session at a moment: before 12:00 local time the 09:00 slot, from 12:00 the 13:00 slot
+// (EXAM_TIMEZONE, default Africa/Johannesburg).
+function sessionAt(when) {
+  const tz = process.env.EXAM_TIMEZONE || 'Africa/Johannesburg';
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23' })
+    .formatToParts(when).reduce((o, p) => ({ ...o, [p.type]: p.value }), {});
+  return { date: `${parts.year}-${parts.month}-${parts.day}`, slot: Number(parts.hour) < 12 ? SLOTS[0] : SLOTS[1] };
+}
+
 // Error that the route layer turns into an HTTP response.
 class HttpError extends Error {
   constructor(status, message, extra) { super(message); this.name = 'HttpError'; this.status = status; this.extra = extra; }
@@ -119,4 +128,4 @@ async function unenrol(tx, studentId, moduleId) {
 // Seating a whole module is many small queries, so allow longer than Prisma's 5 s default.
 const inTransaction = (prisma, fn) => prisma.$transaction(fn, { maxWait: 10000, timeout: 60000 });
 
-module.exports = { SLOTS, isValidDate, HttpError, lockSession, availability, assignSeats, failIfProblems, enrol, unenrol, inTransaction };
+module.exports = { SLOTS, isValidDate, sessionAt, HttpError, lockSession, availability, assignSeats, failIfProblems, enrol, unenrol, inTransaction };

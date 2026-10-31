@@ -5,6 +5,7 @@ require('dotenv').config({ quiet: true });
 const { trimBody } = require('./http');
 const prisma = require('./db');
 const auth = require('./auth');
+const { COURSES } = require('./courses');
 const venuesRouter = require('./routes/venues');
 const devicesRouter = require('./routes/devices');
 const studentsRouter = require('./routes/students');
@@ -33,6 +34,7 @@ app.get('/health', (req, res) => {
 // calls with its own key (see DEVICE_ROUTES in auth.js). No-op until JWT_SECRET is set.
 app.use('/api', auth.gate);
 
+app.get('/api/courses', (req, res) => res.json(COURSES));
 app.use('/api/auth', authRouter);
 app.use('/api/users', usersRouter);
 app.use('/api/venues', venuesRouter);

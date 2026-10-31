@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import ConfirmDeleteDialog from '@/components/ConfirmDeleteDialog';
+import CourseSelect from '@/components/CourseSelect';
 import { api } from '@/lib/api';
 import { ArrowLeft } from 'lucide-react';
 
@@ -84,8 +85,8 @@ export default function StudentDetail() {
             <Input value={name} onChange={(e) => setName(e.target.value)} />
           </div>
           <div className="space-y-2">
-            <label className="text-sm font-medium">Course name</label>
-            <Input value={courseName} onChange={(e) => setCourseName(e.target.value)} placeholder="e.g. National Diploma: Information Technology" />
+            <label htmlFor="student-course" className="text-sm font-medium">Course</label>
+            <CourseSelect id="student-course" value={courseName} onChange={setCourseName} />
           </div>
           <div className="space-y-2">
             <label className="text-sm font-medium">Registered modules</label>

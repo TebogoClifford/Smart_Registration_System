@@ -3,6 +3,7 @@ const router = express.Router();
 const prisma = require('../db');
 const { validateIdParam, isId, handleDbError, keyMatches } = require('../http');
 const { enrol, unenrol, inTransaction } = require('../bookings');
+const { COURSES, checkCourse } = require('../courses');
 
 // Explicit field list: never load the enrolment photo (bytes) here; has_image says whether there is one.
 const STUDENT_SELECT = {
@@ -21,19 +22,20 @@ async function getStudent(id) {
 // the device a student is enrolled on, with its key (to check X-Device-Key)
 const studentDevice = (id) => prisma.students.findUnique({ where: { id: Number(id) }, select: { id: true, devices: { select: { api_key: true } } } });
 
-const cleanCourse = (c) => (c === undefined || c === null || String(c).trim() === '' ? null : String(c).trim());
+const BAD_COURSE = `course_name must be one of: ${COURSES.join('; ')}`;
 
 router.param('id', validateIdParam);
 
 // POST /api/students — start enrollment (status defaults to 'pending')
 router.post('/', async (req, res) => {
   const { student_number, name, device_id } = (req.body ?? {});
-  const course_name = cleanCourse(req.body?.course_name);
+  const course_name = checkCourse(req.body?.course_name);
   if (!student_number || !name || !device_id) {
     return res
       .status(400)
       .json({ error: 'student_number, name, and device_id are required' });
   }
+  if (course_name === undefined) return res.status(400).json({ error: BAD_COURSE });
   if (!isId(device_id)) return res.status(400).json({ error: 'device_id must be a positive integer' });
   try {
     // Same student enrolled twice on the same device would give two embeddings for one person.
@@ -82,12 +84,15 @@ router.get('/:id', async (req, res) => {
 router.put('/:id', async (req, res) => {
   const { id } = req.params;
   const { student_number, name, device_id } = (req.body ?? {});
-  const course_name = cleanCourse(req.body?.course_name);
   if (!student_number || !name || !device_id) {
     return res.status(400).json({ error: 'student_number, name, and device_id are required' });
   }
   if (!isId(device_id)) return res.status(400).json({ error: 'device_id must be a positive integer' });
   try {
+    // a course saved before the list existed may stay as it is
+    const current = await prisma.students.findUnique({ where: { id: Number(id) }, select: { course_name: true } });
+    const course_name = checkCourse(req.body?.course_name, current?.course_name);
+    if (course_name === undefined) return res.status(400).json({ error: BAD_COURSE });
     const dup = await prisma.students.findFirst({
       where: { student_number: String(student_number), device_id: Number(device_id), id: { not: Number(id) } }, select: { id: true },
     });

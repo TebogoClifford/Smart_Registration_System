@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const { validateIdParam, isId, handleDbError, isNotFound, liveStatus, toDbDate } = require('../http');
 const { requireDevice } = require('../deviceAuth');
 const auth = require('../auth');
-const { SLOTS, isValidDate } = require('../bookings');
+const { SLOTS, isValidDate, sessionAt } = require('../bookings');
 
 const BATCH_MAX = 100; // keep in step with routes/accessEvents.js
 
@@ -154,14 +154,7 @@ router.get('/:id/roster', requireDevice, async (req, res) => {
   }
 });
 
-// The exam session a device should serve right now. Before 12:00 local time it is the 09:00 slot,
-// from 12:00 onwards the 13:00 slot (EXAM_TIMEZONE, default Africa/Johannesburg).
-function currentSession() {
-  const tz = process.env.EXAM_TIMEZONE || 'Africa/Johannesburg';
-  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23' })
-    .formatToParts(new Date()).reduce((o, p) => ({ ...o, [p.type]: p.value }), {});
-  return { date: `${parts.year}-${parts.month}-${parts.day}`, slot: Number(parts.hour) < 12 ? SLOTS[0] : SLOTS[1] };
-}
+const currentSession = () => sessionAt(new Date());
 
 // GET /api/devices/:id/session[?date=YYYY-MM-DD&slot=09:00] — who may enter this venue in this session.
 // Only students with a reserved seat are listed; the device denies everyone else.

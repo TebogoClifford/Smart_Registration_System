@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { api } from '@/lib/api';
 import OverrideDialog from '@/components/OverrideDialog';
 import ExamSittings from '@/components/ExamSittings';
+import RecognisedNow from '@/components/RecognisedNow';
 import { localDate, addDays, formatDay, groupSittings } from '@/lib/exams';
 import {
   RefreshCcw, Wifi, WifiOff, AlertCircle, Download, Filter, UserPlus, Search,
@@ -191,7 +192,7 @@ function ExamHallBookings({ refreshKey }) {
           : bookings === null ? <div className="space-y-3">{[1, 2].map((i) => <div key={i} className="h-20 animate-pulse rounded-md bg-slate-100" />)}</div>
             : sittings.length === 0 ? <p className="py-6 text-center text-sm text-slate-500">No exams booked in the next {EXAM_DAYS_AHEAD} days.</p>
               : <>
-                <ExamSittings sittings={sittings.slice(0, 6)} showDate formatDate={(d) => (d === today ? 'Today' : formatDay(d))} className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3" />
+                <ExamSittings sittings={sittings.slice(0, 6)} showDate formatDate={(d) => (d === today ? 'Today' : formatDay(d))} className="grid gap-3 md:grid-cols-2" />
                 {sittings.length > 6 && <button type="button" onClick={() => navigate('/calendar')} className="text-xs font-semibold text-blue-700 hover:text-blue-900">+{sittings.length - 6} more sittings in the calendar</button>}
               </>}
       </CardContent>
@@ -376,7 +377,10 @@ export default function Dashboard() {
           footer={totalStudents !== null && <><div className="mb-1.5 flex items-center justify-between text-[11px] text-slate-500"><span>Enrollment progress</span><span className="font-semibold text-slate-700">{enrollmentRate}%</span></div><div className="h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-violet-500 transition-all" style={{ width: `${Math.min(100, Math.max(0, enrollmentRate))}%` }} /></div></>} />
       </section>
 
-      <ExamHallBookings refreshKey={examRefresh} />
+      <section className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(320px,1fr)_minmax(0,1.55fr)]">
+        <RecognisedNow />
+        <ExamHallBookings refreshKey={examRefresh} />
+      </section>
 
       <section className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.55fr)_minmax(300px,1fr)]">
         <Card className="rounded-lg border-slate-200/80 shadow-sm">

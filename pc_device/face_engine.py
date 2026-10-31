@@ -5,11 +5,16 @@ Uses the two OpenCV Zoo models (run download_models.py once to fetch them into m
   * SFace  - turns an aligned face into a 128-number "embedding". Two photos of the same
              person give embeddings that point the same way (high cosine similarity).
 
-Embeddings stay on this PC (data/faces/<studentId>.npy), exactly like the ESP32 design:
-the backend only ever learns "enrolled" / "failed" and the access decisions.
+Each enrolled student gets two files on this PC, named by student number:
+  data/photos/<student number>.jpg        - the enrolment photo
+  data/embeddings/<student number>.json   - the face embedding (128 numbers) and who it belongs to
+The embedding never leaves this PC, exactly like the ESP32 design: the backend only learns
+"enrolled" / "failed", the enrolment photo and the access decisions.
 """
 import json
 import os
+import re
+import time
 from pathlib import Path
 
 import cv2
@@ -51,47 +56,90 @@ class FaceEngine:
         return feat / (np.linalg.norm(feat) + 1e-9)
 
 
-class FaceStore:
-    """The enrolled faces on this PC: one averaged embedding per student, saved as .npy files."""
+def _file_name(student_number):
+    """A student number as a safe file name (letters, digits, - and _ only)."""
+    return re.sub(r"[^A-Za-z0-9_-]", "_", str(student_number)) or "unknown"
 
-    def __init__(self, folder):
-        self.folder = Path(folder)
-        self.folder.mkdir(parents=True, exist_ok=True)
-        self.index_file = self.folder / "index.json"
+
+def _write_atomic(path, data):
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, path)
+
+
+class FaceStore:
+    """The enrolled faces on this PC: per student one photo (data/photos) and one embedding (data/embeddings)."""
+
+    def __init__(self, data_folder):
+        data = Path(data_folder)
+        self.photos = data / "photos"
+        self.embeddings = data / "embeddings"
+        self.photos.mkdir(parents=True, exist_ok=True)
+        self.embeddings.mkdir(parents=True, exist_ok=True)
         self.people = {}  # studentId -> {"studentNumber", "name", "embedding"}
+        self._migrate_old(data / "faces")
         self._load()
 
     def _load(self):
-        index = {}
-        if self.index_file.exists():
-            index = json.loads(self.index_file.read_text(encoding="utf-8"))
+        for path in sorted(self.embeddings.glob("*.json")):
+            try:
+                rec = json.loads(path.read_text(encoding="utf-8"))
+                emb = np.asarray(rec["embedding"], dtype=np.float32)
+                self.people[int(rec["studentId"])] = {"studentNumber": rec["studentNumber"], "name": rec["name"], "embedding": emb}
+            except (ValueError, KeyError, TypeError) as err:
+                print(f"skipping unreadable embedding file {path.name}: {err}")
+
+    def _migrate_old(self, old):
+        """Older versions kept data/faces/<studentId>.npy + index.json; turn those into the new files once."""
+        index_file = old / "index.json"
+        if not index_file.exists():
+            return
+        try:
+            index = json.loads(index_file.read_text(encoding="utf-8") or "{}")
+        except ValueError:
+            index = {}
         for sid, meta in index.items():
-            path = self.folder / f"{sid}.npy"
-            if path.exists():
-                self.people[int(sid)] = {**meta, "embedding": np.load(path)}
+            npy = old / f"{sid}.npy"
+            if npy.exists():
+                self._write_embedding(int(sid), meta["studentNumber"], meta["name"], np.load(npy), samples=None)
+                npy.unlink()
+        index_file.unlink()
 
-    def _save_index(self):
-        index = {str(sid): {"studentNumber": p["studentNumber"], "name": p["name"]} for sid, p in self.people.items()}
-        tmp = self.index_file.with_suffix(".tmp")
-        tmp.write_text(json.dumps(index, indent=2), encoding="utf-8")
-        os.replace(tmp, self.index_file)
+    def _write_embedding(self, student_id, student_number, name, embedding, samples):
+        rec = {
+            "studentId": int(student_id), "studentNumber": str(student_number), "name": name,
+            "model": "SFace (OpenCV Zoo, face_recognition_sface_2021dec)", "samples": samples,
+            "enrolledAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "embedding": [round(float(v), 6) for v in embedding],
+        }
+        _write_atomic(self.embeddings / f"{_file_name(student_number)}.json", json.dumps(rec, indent=2).encode("utf-8"))
 
-    def add(self, student_id, student_number, name, embeddings):
+    def photo_path(self, student_number):
+        return self.photos / f"{_file_name(student_number)}.jpg"
+
+    def add(self, student_id, student_number, name, embeddings, photo_jpg=None):
+        """Save a new enrolment: the averaged embedding (JSON) and, if given, the photo (JPEG bytes)."""
         mean = np.mean(np.stack(embeddings), axis=0)
         mean = mean / (np.linalg.norm(mean) + 1e-9)
-        np.save(self.folder / f"{student_id}.npy", mean)
-        self.people[int(student_id)] = {"studentNumber": student_number, "name": name, "embedding": mean}
-        self._save_index()
+        # the same student enrolled again under a changed number: drop the old files first
+        old = self.people.get(int(student_id))
+        if old and old["studentNumber"] != str(student_number):
+            self._delete_files(old["studentNumber"])
+        self._write_embedding(student_id, student_number, name, mean, samples=len(embeddings))
+        if photo_jpg:
+            _write_atomic(self.photo_path(student_number), photo_jpg)
+        self.people[int(student_id)] = {"studentNumber": str(student_number), "name": name, "embedding": mean}
+
+    def _delete_files(self, student_number):
+        (self.embeddings / f"{_file_name(student_number)}.json").unlink(missing_ok=True)
+        self.photo_path(student_number).unlink(missing_ok=True)
 
     def keep_only(self, student_ids):
         """Delete every face whose student is no longer on this device's roster. Returns how many went."""
         keep = {int(s) for s in student_ids}
         gone = [sid for sid in self.people if sid not in keep]
         for sid in gone:
-            self.people.pop(sid)
-            (self.folder / f"{sid}.npy").unlink(missing_ok=True)
-        if gone:
-            self._save_index()
+            self._delete_files(self.people.pop(sid)["studentNumber"])
         return len(gone)
 
     def best_match(self, embedding, allowed_ids=None):

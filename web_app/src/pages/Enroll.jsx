@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import CourseSelect from '@/components/CourseSelect';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { UserPlus, CheckCircle2, Info, AlertCircle, Loader2, XCircle, RefreshCcw } from 'lucide-react';
@@ -267,13 +268,8 @@ export default function Enroll() {
                   </div>
 
                   <div className="space-y-2">
-                    <label htmlFor="course-name" className="text-sm font-medium">Course name <span className="font-normal text-muted-foreground">(optional)</span></label>
-                    <Input
-                      id="course-name"
-                      value={courseName}
-                      onChange={(e) => setCourseName(e.target.value)}
-                      placeholder="e.g. National Diploma: Information Technology"
-                    />
+                    <label htmlFor="course-name" className="text-sm font-medium">Course <span className="font-normal text-muted-foreground">(optional)</span></label>
+                    <CourseSelect id="course-name" value={courseName} onChange={setCourseName} />
                     <p className="text-xs text-muted-foreground">Modules are assigned afterwards on the student's page or under Modules.</p>
                   </div>
 

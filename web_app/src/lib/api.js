@@ -160,6 +160,14 @@ const api = {
   async getAvailability(venueId, date, slot) { return (await http.get('/api/bookings/availability', { params: { venueId, date, slot } })).data; },
   async createBooking(moduleId, venueId, date, slot) { return (await http.post('/api/bookings', { moduleId, venueId, date, slot })).data; },
   async cancelBooking(id) { return (await http.delete(`/api/bookings/${id}`)).data; },
+  // ---- courses, recognitions and enrolment photos
+  async getCourses() { return (await http.get('/api/courses')).data; },
+  async getRecognitions(limit = 8) { return (await http.get('/api/access-events/recognitions', { params: { limit } })).data; },
+  // the photo needs the sign-in header, so it is fetched as a blob; revoke the URL when done with it
+  async getStudentPhotoUrl(id) {
+    const response = await http.get(`/api/students/${id}/enrollment-image`, { responseType: 'blob' });
+    return URL.createObjectURL(response.data);
+  },
   async getStats() {
     const response = await http.get(`/api/stats`);
     return response.data;

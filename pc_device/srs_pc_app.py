@@ -2,11 +2,13 @@
 
 It plays the ESP32-CAM's part (see Backend/DEVICE_API.md):
   * ENROL  - when an invigilator presses "Start enrollment" on the web console, this program sees
-             the student in pending-enrollments, captures their face automatically, keeps the
-             embedding on this PC and reports "enrolled" (or "failed") back to the console.
-  * VERIFY - otherwise it watches the door: a face that matches a student seated in this venue's
-             current exam session is GRANTED (seat number shown), anything else is DENIED.
-             Every decision is sent to the backend and appears on the dashboard.
+             the student in pending-enrollments, captures their face automatically, saves
+             data/photos/<student number>.jpg and data/embeddings/<student number>.json on this PC,
+             and reports "enrolled" (or "failed") and the photo back to the console.
+  * RECOGNISE - off at start; the "Start recognition" button turns it on. Any enrolled student
+             whose face matches is RECOGNISED (granted; their seat is shown if they have one in this
+             session), an unknown face is DENIED. Every decision is sent to the backend and appears
+             on the dashboard's "Recognised now" panel and access events.
   * OFFLINE - decisions are queued on disk (data/event_queue.json) and uploaded when the
              network is back; the server ignores duplicates.
   * ARDUINO (optional) - with --serial COM3 (or serial_port in config.ini) the door unit in
@@ -327,6 +329,7 @@ class DoorEngine(threading.Thread):
         self.unknown_logged = False
         self.face_seen_at = 0.0
         self.skip_requested = False
+        self.recognising = False       # the window's Start/Stop recognition button
         self.history = deque(maxlen=50)  # (time, decision, who)
 
     # -- called from the window thread
@@ -335,6 +338,13 @@ class DoorEngine(threading.Thread):
 
     def request_skip(self):
         self.skip_requested = True
+
+    def toggle_recognition(self):
+        self.recognising = not self.recognising
+        self.streak = (None, 0)
+        self.gate_at = 0.0
+        log("recognition mode", "ON" if self.recognising else "OFF")
+        return self.recognising
 
     def rescan(self):
         cams = list_cameras(skip=self.camera_index)
@@ -352,7 +362,7 @@ class DoorEngine(threading.Thread):
                              samples=len(e["samples"]), hint=e.get("hint", ""),
                              seconds_left=max(0, int(ENROL_TIMEOUT - (time.time() - e["started"]))))
             return dict(frame=self.frame, camera=self.camera_index, cameras=list(self.cameras),
-                        arduino=bool(self.arduino), gate_open=self._gate_open(),
+                        arduino=bool(self.arduino), gate_open=self._gate_open(), recognising=self.recognising,
                         camera_error=self.camera_error, enrolling=enrol,
                         result=self.result if self.result and time.time() < self.result[2] else None,
                         faces_stored=len(self.store.people), history=list(self.history))
@@ -362,10 +372,13 @@ class DoorEngine(threading.Thread):
         st = self.enrolling["student"]
         sid = st["studentId"]
         if ok:
-            self.store.add(sid, st["studentNumber"], st["name"], self.enrolling["samples"])
+            # two files on this PC: data/photos/<number>.jpg and data/embeddings/<number>.json
             okj, jpg = cv2.imencode(".jpg", self.enrolling["frame"], [cv2.IMWRITE_JPEG_QUALITY, 85])
-            if okj and len(jpg) < 1_000_000:
-                self.backend.tasks.put(lambda: self.client.upload_enrollment_image(sid, jpg.tobytes()))
+            photo = jpg.tobytes() if okj else None
+            self.store.add(sid, st["studentNumber"], st["name"], self.enrolling["samples"], photo_jpg=photo)
+            log(f"saved {self.store.photo_path(st['studentNumber']).name} and the embedding for {st['studentNumber']}")
+            if photo and len(photo) < 1_000_000:
+                self.backend.tasks.put(lambda: self.client.upload_enrollment_image(sid, photo))
         self.backend.report_enrollment(sid, ok)
         self.handled.add(sid)
         self.result = ("granted" if ok else "denied", f"{'Enrolled' if ok else 'Enrolment failed'}: {st['name']}",
@@ -453,14 +466,14 @@ class DoorEngine(threading.Thread):
             self.unknown_logged = True
         elif now - self.recent.get(sid, 0) < SAME_PERSON_COOLDOWN:
             return label
-        seated = {s["studentId"]: s for s in session.get("students", [])}
-        seat = seated.get(sid)
-        if seat and seat.get("onThisDevice", True):
-            decision, text = "granted", f"GRANTED  {person['name']}\nseat {seat['seatNumber']} · {seat['moduleCode']}"
-        elif person:
-            decision, text = "denied", f"DENIED  {person['name']}\nno seat in this session"
+        # every enrolled student is recognised and let through; the web console shows whether they
+        # have a seat in the exam running now
+        seat = {s["studentId"]: s for s in session.get("students", [])}.get(sid)
+        if person:
+            where = f"seat {seat['seatNumber']} · {seat['moduleCode']}" if seat else "no exam seat in this session"
+            decision, text = "granted", f"RECOGNISED  {person['name']}\n{person['studentNumber']} · {where}"
         else:
-            decision, text = "denied", "DENIED\nface not recognised"
+            decision, text = "denied", "NOT RECOGNISED\nface is not enrolled"
         if sid is not None:
             self.recent[sid] = now
         self.backend.record(decision, sid)
@@ -529,7 +542,7 @@ class DoorEngine(threading.Thread):
                     log("enrolment requested:", todo[0]["studentNumber"], todo[0]["name"])
             if self.enrolling:
                 self._step_enrolment(frame, faces)
-            elif not showing:
+            elif not showing and self.recognising:
                 label = self._decide(frame, faces, snap["session"])
             view = frame
             for n, f in enumerate(faces):
@@ -649,8 +662,13 @@ class DoorWindow:
         self.banner = tk.Label(right, text="Ready", bg=IDLE_BG, fg=INK, font=("Segoe UI Semibold", 16),
                                height=3, justify="center")
         self.banner.grid(row=1, column=0, sticky="ew", pady=(8, 8))
+        # recognition is off at start: enrolment always works, door decisions only while this is on
+        self.recog_btn = tk.Button(right, text="▶  Start recognition", command=self._toggle_recognition,
+                                   bg=OK_BG, fg="white", activebackground=OK_BG, activeforeground="white",
+                                   font=("Segoe UI Semibold", 13), relief="flat", cursor="hand2", pady=6)
+        self.recog_btn.grid(row=2, column=0, sticky="ew", pady=(0, 8))
         camrow = tk.Frame(right, bg=BG)
-        camrow.grid(row=2, column=0, sticky="ew")
+        camrow.grid(row=3, column=0, sticky="ew")
         tk.Label(camrow, text="Camera", bg=BG, fg=INK).pack(side="left")
         self.cam_pick = ttk.Combobox(camrow, state="readonly", width=34)
         self.cam_pick.pack(side="left", padx=8)
@@ -754,12 +772,19 @@ class DoorWindow:
                 self.log_box.insert("end", line)
             self._log_len = len(LOG)
 
+    def _toggle_recognition(self):
+        on = self.door.toggle_recognition()
+        self.recog_btn.config(text="■  Stop recognition" if on else "▶  Start recognition",
+                              bg=BAD_BG if on else OK_BG, activebackground=BAD_BG if on else OK_BG)
+
     def _refresh_banner(self, st):
         r = st["result"]
         if r:
             self.banner.config(text=r[1], bg=OK_BG if r[0] == "granted" else BAD_BG, fg="white")
         elif st["enrolling"]:
             self.banner.config(text=f"Enrolling {st['enrolling']['name']}", bg=WARN_BG, fg="white")
+        elif not st["recognising"]:
+            self.banner.config(text="Recognition is off\npress Start recognition to scan students", bg=IDLE_BG, fg=MUTED)
         elif st["arduino"] and not st["gate_open"]:
             self.banner.config(text="Stand at the marker and hold still for 1 second", bg=IDLE_BG, fg=INK)
         else:
@@ -785,7 +810,7 @@ class DoorWindow:
 
 
 def run_gui(args):
-    store = FaceStore(DATA / "faces")
+    store = FaceStore(DATA)
     client = SrsClient(args.url, args.device_id, args.key)
     backend = Backend(client, store)
     door = DoorEngine(args, backend, store, client)
@@ -809,7 +834,7 @@ def check(args):
     s = client.session()
     log(f"session {s['date']} {s['slot']}: {len(s['students'])} seated")
     log(f"roster: {len(client.roster())} student(s) enrolled on this device")
-    store = FaceStore(DATA / "faces")
+    store = FaceStore(DATA)
     log(f"faces stored on this PC: {len(store.people)}")
     FaceEngine()
     log("face models load OK.")
