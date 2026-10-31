@@ -15,7 +15,8 @@
     "create-user": "node src/createUser.js",
     "seed-demo": "node tools/seed-demo.js",
     "seed-exams": "node tools/seed-exams.js",
-    "lint": "eslint src test tools"
+    "lint": "eslint src test tools",
+    "seed-activity": "node tools/seed-activity.js"
   },
   "keywords": [],
   "author": "",

@@ -11,7 +11,7 @@ import { useDraft } from '@/lib/drafts';
 import OverrideDialog from '@/components/OverrideDialog';
 import ExamCalendarView from '@/components/ExamCalendarView';
 import RecognisedNow from '@/components/RecognisedNow';
-import { localDate, addDays, groupSittings } from '@/lib/exams';
+import { localDate, addDays, parseDate, groupSittings } from '@/lib/exams';
 import {
   RefreshCcw, Wifi, WifiOff, AlertCircle, Download, Filter, UserPlus, Search,
   Users, CheckCircle2, XCircle, Activity, TrendingUp, MapPin, ArrowUpRight, CalendarDays, Armchair
@@ -89,37 +89,107 @@ function DailyTrendChart({ data, loading }) {
       <p className="mt-1 text-xs text-slate-500">Access events from the last seven days will appear here.</p>
     </div>;
   }
+  return <TrendBars data={data} max={max} />;
+}
+
+// Access decisions per day as stacked bars (bottom to top: granted, denied, other). Colours are a
+// validated colour-blind-safe set (blue / orange / violet, checked with the dataviz validator) and
+// every series is also named in the legend and the hover card, so identity is never colour alone.
+const TREND_SERIES = [
+  { key: 'granted', label: 'Granted', color: '#2a78d6' },
+  { key: 'denied', label: 'Denied', color: '#eb6834' },
+  { key: 'other', label: 'Already inside / errors', color: '#6250d6' },
+];
+// A round axis top (1, 2, 2.5 or 5 × 10^n per gridline, whole numbers) at or above `max`, with 4 gridlines.
+function niceTop(max) {
+  const raw = Math.max(1, max) / 4;
+  const mag = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw && Number.isInteger(s));
+  return { top: step * 4, step };
+}
+
+function TrendBars({ data, max }) {
+  const [hover, setHover] = useState(null);
+  const { top, step } = niceTop(max);
+  const today = localDate();
+  const rows = data.map((d) => {
+    const granted = Number(d.granted) || 0;
+    const denied = Number(d.denied) || 0;
+    const total = Number(d.total) || 0;
+    return { ...d, granted, denied, other: Math.max(0, total - granted - denied), total, day: Number(String(d.date).slice(8, 10)) };
+  });
+  const peak = rows.reduce((best, r) => (r.total > best.total ? r : best), rows[0]);
+  const weekTotals = Object.fromEntries(TREND_SERIES.map((s) => [s.key, rows.reduce((n, r) => n + r[s.key], 0)]));
+
   return (
-    <div className="pt-3">
-      <div className="flex h-52 items-end gap-2 border-b border-slate-100 px-1 sm:gap-4">
-        {data.map((day) => {
-          const granted = Number(day.granted) || 0;
-          const denied = Number(day.denied) || 0;
-          const other = Math.max(0, (Number(day.total) || 0) - granted - denied);
-          const totalHeight = Math.max(3, ((Number(day.total) || 0) / max) * 100);
-          const grantedHeight = ((granted / max) * 100);
-          const deniedHeight = ((denied / max) * 100);
-          const otherHeight = ((other / max) * 100);
-          return (
-            <div key={day.date} className="group flex h-full min-w-0 flex-1 flex-col justify-end">
-              <div className="mb-2 text-center text-[11px] font-semibold tabular-nums text-slate-500 opacity-0 transition-opacity group-hover:opacity-100">{day.total}</div>
-              <div className="flex w-full items-end justify-center" style={{ height: 'calc(100% - 20px)' }} title={`${day.label}: ${day.total} attempts · ${granted} granted · ${denied} denied`}>
-                <div className="flex w-full max-w-10 flex-col justify-end overflow-hidden rounded-t-lg bg-slate-100" style={{ height: `${totalHeight}%`, minHeight: '3px' }}>
-                  {other > 0 && <div className="w-full bg-amber-400" style={{ height: `${(otherHeight / totalHeight) * 100}%` }} />}
-                  {denied > 0 && <div className="w-full bg-rose-400" style={{ height: `${(deniedHeight / totalHeight) * 100}%` }} />}
-                  {granted > 0 && <div className="w-full bg-blue-600" style={{ height: `${(grantedHeight / totalHeight) * 100}%` }} />}
+    <div className="pt-2">
+      <div className="flex">
+        {/* y axis: recessive numbers at each gridline */}
+        <div className="relative mr-2 h-52 w-7 shrink-0 text-right text-[11px] tabular-nums text-slate-400" aria-hidden="true">
+          {[0, 1, 2, 3, 4].map((i) => <span key={i} className="absolute right-0 -translate-y-1/2" style={{ bottom: `${(i / 4) * 100}%` }}>{i * step}</span>)}
+        </div>
+        <div className="relative min-w-0 flex-1">
+          {[1, 2, 3, 4].map((i) => <div key={i} aria-hidden="true" className="absolute inset-x-0 border-t border-dashed border-slate-100" style={{ bottom: `${(i / 4) * 100}%` }} />)}
+          <div className="relative flex h-52 items-end gap-1.5 border-b border-slate-200 sm:gap-3">
+            {rows.map((r, i) => {
+              const isToday = r.date === today;
+              const height = (r.total / top) * 100;
+              const showLabel = hover === null && r.total > 0 && (isToday || r === peak); // selective direct labels
+              return (
+                <div
+                  key={r.date} tabIndex={0} role="img"
+                  aria-label={`${r.label} ${r.day}: ${r.total} access attempts, ${r.granted} granted, ${r.denied} denied, ${r.other} other`}
+                  onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)} onFocus={() => setHover(i)} onBlur={() => setHover(null)}
+                  className={`relative flex h-full min-w-0 flex-1 cursor-default flex-col items-center justify-end rounded-t-md outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${hover === i ? 'bg-slate-50' : ''}`}
+                >
+                  {showLabel && <span className="mb-1 text-[11px] font-semibold tabular-nums text-slate-600">{r.total}</span>}
+                  {/* the bar: segments with a 2px surface gap, 4px rounded top, anchored to the baseline */}
+                  <div className="flex w-full max-w-9 flex-col-reverse gap-[2px] overflow-hidden rounded-t-[4px]" style={{ height: `${height}%` }}>
+                    {TREND_SERIES.map((s) => r[s.key] > 0 && (
+                      <div key={s.key} style={{ height: `${(r[s.key] / r.total) * 100}%`, minHeight: 2, background: s.color }} />
+                    ))}
+                  </div>
+                  {hover === i && (
+                    <div role="tooltip" className="pointer-events-none absolute z-10 w-44 -translate-x-1/2 rounded-md border border-slate-200 bg-white p-2.5 text-xs shadow-lg"
+                      style={{ left: '50%', bottom: `calc(${Math.min(height, 70)}% + 10px)` }}>
+                      <p className="mb-1.5 font-semibold text-slate-800">{parseDate(r.date).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' })}</p>
+                      {TREND_SERIES.map((s) => (
+                        <p key={s.key} className="flex items-center justify-between gap-2 text-slate-600">
+                          <span className="inline-flex items-center gap-1.5"><span className="size-2.5 rounded-sm" style={{ background: s.color }} />{s.label}</span>
+                          <span className="font-semibold tabular-nums text-slate-800">{r[s.key]}</span>
+                        </p>
+                      ))}
+                      <p className="mt-1.5 flex justify-between border-t border-slate-100 pt-1.5 font-semibold text-slate-800"><span>Total</span><span className="tabular-nums">{r.total}</span></p>
+                    </div>
+                  )}
                 </div>
-              </div>
-              <span className="mt-3 truncate pb-3 text-center text-[11px] font-medium text-slate-500">{day.label}</span>
-            </div>
-          );
-        })}
+              );
+            })}
+          </div>
+          <div className="mt-2 flex gap-1.5 sm:gap-3" aria-hidden="true">
+            {rows.map((r) => (
+              <span key={r.date} className={`min-w-0 flex-1 truncate text-center text-[11px] ${r.date === today ? 'font-bold text-slate-800' : 'font-medium text-slate-500'}`}>
+                {r.label} {r.day}
+              </span>
+            ))}
+          </div>
+        </div>
       </div>
-      <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-xs text-slate-500">
-        <span className="inline-flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-sm bg-blue-600" /> Granted</span>
-        <span className="inline-flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-sm bg-rose-400" /> Denied</span>
-        <span className="inline-flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-sm bg-amber-400" /> Other</span>
+      {/* legend with the week's totals */}
+      <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-xs text-slate-600">
+        {TREND_SERIES.map((s) => (
+          <span key={s.key} className="inline-flex items-center gap-2">
+            <span className="size-2.5 rounded-sm" style={{ background: s.color }} />{s.label}
+            <span className="font-semibold tabular-nums text-slate-800">{weekTotals[s.key]}</span>
+          </span>
+        ))}
       </div>
+      {/* the same numbers as a table, for screen readers */}
+      <table className="sr-only">
+        <caption>Access decisions per day, last 7 days</caption>
+        <thead><tr><th>Day</th>{TREND_SERIES.map((s) => <th key={s.key}>{s.label}</th>)}<th>Total</th></tr></thead>
+        <tbody>{rows.map((r) => <tr key={r.date}><td>{r.date}</td>{TREND_SERIES.map((s) => <td key={s.key}>{r[s.key]}</td>)}<td>{r.total}</td></tr>)}</tbody>
+      </table>
     </div>
   );
 }
