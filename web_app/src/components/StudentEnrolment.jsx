@@ -11,33 +11,18 @@ const POLL_MS = 3000;
 const TONE = { enrolled: 'default', pending: 'secondary', failed: 'destructive' };
 const LABEL = { enrolled: 'Enrolled', pending: 'Pending', failed: 'Failed' };
 
-// The student's face enrolment: status, photo, and an Enrol button that asks their door device
-// (e.g. PC-01) to capture them. While a capture is waiting, the status refreshes on its own.
-export default function StudentEnrolment({ student, device, onStudentChange }) {
-  const [busy, setBusy] = useState(false);
+// True while a capture request is waiting for the device to answer.
+const isWaiting = (student, now = Date.now()) => student.enrollment_status === 'pending'
+  && !!student.enrollment_requested_at && now - new Date(student.enrollment_requested_at).getTime() < REQUEST_TTL_MS;
+
+// The student's face enrolment: status, photo, device and an explanation (the Enrol face button
+// sits with the page's other actions, see EnrolFaceButton).
+export default function StudentEnrolment({ student, device }) {
   const [photo, setPhoto] = useState(null);
-  const [now, setNow] = useState(() => Date.now());
   const photoUrl = useRef(null);
-
   const status = student.enrollment_status;
-  const requestedAt = student.enrollment_requested_at ? new Date(student.enrollment_requested_at).getTime() : 0;
-  const waiting = status === 'pending' && now - requestedAt < REQUEST_TTL_MS;
-
-  // follow a capture in progress until the device reports back
-  useEffect(() => {
-    if (!waiting) return undefined;
-    const t = window.setInterval(() => {
-      setNow(Date.now());
-      api.getStudent(student.id).then((s) => {
-        if (s.enrollment_status !== 'pending') {
-          toast[s.enrollment_status === 'enrolled' ? 'success' : 'error'](
-            s.enrollment_status === 'enrolled' ? `${s.name}'s face is enrolled on ${device?.name ?? 'the device'}` : `Capture failed for ${s.name}. Try Enrol face again.`);
-        }
-        onStudentChange(s);
-      }).catch(() => {});
-    }, POLL_MS);
-    return () => window.clearInterval(t);
-  }, [waiting, student.id, device?.name, onStudentChange]);
+  const waiting = isWaiting(student);
+  const requestedAt = student.enrollment_requested_at ? new Date(student.enrollment_requested_at) : null;
 
   // the enrolment photo (needs the sign-in header, so it is fetched as a blob)
   useEffect(() => {
@@ -53,22 +38,12 @@ export default function StudentEnrolment({ student, device, onStudentChange }) {
   }, [student.id, student.has_image, status]);
   useEffect(() => () => { if (photoUrl.current) URL.revokeObjectURL(photoUrl.current); }, []);
 
-  const enrol = async () => {
-    setBusy(true);
-    try {
-      const s = await api.reEnrollStudent(student.id);
-      setNow(Date.now());
-      onStudentChange(s);
-      toast.success(`Capture requested: ${student.name} should now look at ${device?.name ?? 'the device'}'s camera`);
-    } catch (err) { toast.error(err.message); } finally { setBusy(false); }
-  };
-
   const online = device?.status === 'active';
   const explain = waiting
     ? `Waiting for ${device?.name ?? 'the device'} to capture the face. The student should stand in front of its camera now.`
     : status === 'enrolled' ? `The face is stored on ${device?.name ?? 'the device'}; the student can be recognised.`
       : status === 'failed' ? 'The last capture did not finish (no face found in time, or it was skipped). Press Enrol face to try again.'
-        : 'Registered, but the face has not been captured yet. Press Enrol face while the student is at the device.';
+        : 'Registered, but the face has not been captured yet. Press Enrol face (below) while the student is at the device.';
 
   return (
     <Card>
@@ -92,16 +67,50 @@ export default function StudentEnrolment({ student, device, onStudentChange }) {
               {online ? <Wifi size={13} className="text-emerald-600" /> : <WifiOff size={13} className="text-rose-600" />}
               {device ? `${device.name} is ${online ? 'online' : 'offline'}` : 'No device assigned'}
             </span>
-            {requestedAt > 0 && <span>Last capture request: {new Date(requestedAt).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>}
+            {requestedAt && <span>Last capture request: {requestedAt.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>}
           </p>
           {device && !online && <p className="text-xs text-amber-700">Start the {device.name} program first; a request is only picked up within 10 minutes.</p>}
-          <Button onClick={enrol} disabled={busy || waiting || !device}>
-            {busy ? <Loader2 className="animate-spin" /> : <ScanFace />}
-            {status === 'enrolled' ? 'Re-enrol face' : 'Enrol face'}
-          </Button>
           {status === 'enrolled' && <p className="text-xs text-muted-foreground">Re-enrolling replaces the stored face and photo with a new capture.</p>}
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+// "Enrol face" / "Re-enrol face": asks the student's device (e.g. PC-01) to capture them, then
+// follows the status every few seconds until the device reports enrolled or failed.
+export function EnrolFaceButton({ student, device, onStudentChange }) {
+  const [busy, setBusy] = useState(false);
+  const [, setTick] = useState(0); // re-check the 10-minute window while waiting
+  const waiting = isWaiting(student);
+
+  useEffect(() => {
+    if (!waiting) return undefined;
+    const t = window.setInterval(() => {
+      setTick((n) => n + 1);
+      api.getStudent(student.id).then((s) => {
+        if (s.enrollment_status !== 'pending') {
+          toast[s.enrollment_status === 'enrolled' ? 'success' : 'error'](
+            s.enrollment_status === 'enrolled' ? `${s.name}'s face is enrolled on ${device?.name ?? 'the device'}` : `Capture failed for ${s.name}. Try Enrol face again.`);
+        }
+        onStudentChange(s);
+      }).catch(() => {});
+    }, POLL_MS);
+    return () => window.clearInterval(t);
+  }, [waiting, student.id, device?.name, onStudentChange]);
+
+  const enrol = async () => {
+    setBusy(true);
+    try {
+      onStudentChange(await api.reEnrollStudent(student.id));
+      toast.success(`Capture requested: ${student.name} should now look at ${device?.name ?? 'the device'}'s camera`);
+    } catch (err) { toast.error(err.message); } finally { setBusy(false); }
+  };
+
+  return (
+    <Button type="button" variant="outline" onClick={enrol} disabled={busy || waiting || !device}>
+      {busy || waiting ? <Loader2 className="animate-spin" /> : <ScanFace />}
+      {waiting ? 'Capturing…' : student.enrollment_status === 'enrolled' ? 'Re-enrol face' : 'Enrol face'}
+    </Button>
   );
 }

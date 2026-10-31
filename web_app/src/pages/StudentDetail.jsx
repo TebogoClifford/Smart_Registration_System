@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import ConfirmDeleteDialog from '@/components/ConfirmDeleteDialog';
 import CourseSelect from '@/components/CourseSelect';
-import StudentEnrolment from '@/components/StudentEnrolment';
+import StudentEnrolment, { EnrolFaceButton } from '@/components/StudentEnrolment';
 import { api } from '@/lib/api';
 import { ArrowLeft } from 'lucide-react';
 
@@ -73,7 +73,7 @@ export default function StudentDetail() {
         <ArrowLeft size={16} /> Back to Students
       </Button>
 
-      <StudentEnrolment student={student} device={devices.find((d) => d.id === student.device_id)} onStudentChange={setStudent} />
+      <StudentEnrolment student={student} device={devices.find((d) => d.id === student.device_id)} />
 
       <Card>
         <CardHeader>
@@ -120,8 +120,9 @@ export default function StudentDetail() {
               </SelectContent>
             </Select>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button onClick={handleSave}>Save Changes</Button>
+            <EnrolFaceButton student={student} device={devices.find((d) => d.id === student.device_id)} onStudentChange={setStudent} />
             <ConfirmDeleteDialog itemName="this student" onConfirm={handleDelete} />
           </div>
         </CardContent>
