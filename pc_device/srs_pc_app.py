@@ -52,7 +52,9 @@ try:
 except AttributeError:
     pass
 
-HERE = Path(__file__).resolve().parent
+FROZEN = getattr(sys, "frozen", False)  # running as the one-file "SRS Door.exe" (build_exe.bat)
+HERE = Path(sys.executable).parent if FROZEN else Path(__file__).resolve().parent  # config.ini and data/ live here
+BUNDLE = Path(sys._MEIPASS) if FROZEN else HERE  # files packed inside the .exe (models, config.example.ini)
 sys.path.insert(0, str(HERE.parent / "device_client"))
 from srs_client import SrsClient, SrsError  # noqa: E402
 from arduino_link import MAX_CM, MIN_CM, ArduinoLink, available_ports, guess_arduino_port  # noqa: E402
@@ -84,8 +86,22 @@ def log(*args):
     LOG.append(line)
 
 
+def fail(message):
+    """Stop with a message. The .exe has no console, so there it also shows in a dialog box."""
+    if FROZEN:
+        from tkinter import messagebox
+        box = tk.Tk()
+        box.withdraw()
+        messagebox.showerror("SRS Door", message)
+        box.destroy()
+    raise SystemExit(message)
+
+
 # ---------------------------------------------------------------- settings
 def load_settings():
+    example = BUNDLE / "config.example.ini"
+    if FROZEN and not CONFIG_FILE.exists() and example.exists():  # first start on a new PC: write config.ini beside the .exe
+        CONFIG_FILE.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
     ini = configparser.ConfigParser()
     ini.read(CONFIG_FILE, encoding="utf-8")
     cfg = ini["srs"] if ini.has_section("srs") else {}
@@ -105,7 +121,8 @@ def load_settings():
     p.add_argument("--check", action="store_true", help="test the backend connection and exit (no camera)")
     a = p.parse_args()
     if not a.device_id or not a.key:
-        p.error("set --device-id and --key (an administrator copies the key from the device page in the web console)")
+        fail(f"Set device_id and device_key in {CONFIG_FILE}\n"
+             "(an administrator copies the key from the device page in the web console), then start again.")
     return a
 
 
@@ -1029,7 +1046,7 @@ def key_help(device_id):
 def check(args):
     """--check: prove the URL, device id and key work, without touching the camera."""
     if not args.key or re.search(r"paste|change|xxx|your|here", args.key, re.I):
-        raise SystemExit("device_key in config.ini is empty or still the example text.\n" + key_help(args.device_id))
+        fail("device_key in config.ini is empty or still the example text.\n" + key_help(args.device_id))
     client = SrsClient(args.url, args.device_id, args.key)
     log("waiting for", args.url)
     client.wait_until_up()
@@ -1058,4 +1075,8 @@ if __name__ == "__main__":
     try:
         check(settings) if settings.check else run_gui(settings)
     except SrsError as e:
-        raise SystemExit(f"Backend refused: {e}" + (f"\n{key_help(settings.device_id)}" if e.status in (401, 404) else ""))
+        fail(f"Backend refused: {e}" + (f"\n{key_help(settings.device_id)}" if e.status in (401, 404) else ""))
+    except Exception as e:  # e.g. a missing model file: in the .exe nobody would see the traceback
+        if not FROZEN:
+            raise
+        fail(f"SRS Door stopped: {e}")

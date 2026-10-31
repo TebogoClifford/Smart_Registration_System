@@ -3,3 +3,6 @@ models/*.onnx
 models/*.part
 data/
 __pycache__/
+build/
+dist/
+*.spec

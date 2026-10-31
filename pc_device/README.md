@@ -19,6 +19,19 @@ copy config.example.ini config.ini # then fill in device_id and device_key
 ```
 An **administrator** finds the device id and key on the device's page in the web console (Venues & Devices → Manage → Reveal). Invigilators cannot see keys.
 
+## One-file .exe for other PCs (no Python needed there)
+On this PC, double-click `build_exe.bat` (or run it in a terminal). It installs PyInstaller, fetches the
+models and builds **`dist\SRS Door.exe`** (about 106 MB), the whole program with the face models inside.
+
+On each door PC:
+1. Copy `SRS Door.exe` into a folder of its own, e.g. `C:\SRS Door\` (somewhere it may write files).
+2. Start it once: it writes `config.ini` next to itself and says what is missing.
+3. Fill in `device_id` and `device_key` in that `config.ini` (each door PC gets its own device in the web console), then start it again.
+
+It keeps `config.ini` and `data\` (faces enrolled on this PC, offline queue) next to the .exe; nothing else is
+installed. Start-up takes a few seconds because it unpacks itself first. Windows SmartScreen may warn about an
+unknown app the first time: **More info → Run anyway**. Clone Arduinos with a CH340 chip need the CH340 driver on that PC.
+
 ## Run
 ```
 python srs_pc_app.py --check       # tests URL + key + models, no camera

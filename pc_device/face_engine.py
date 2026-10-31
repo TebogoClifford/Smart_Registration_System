@@ -20,8 +20,10 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-HERE = Path(__file__).resolve().parent
-MODELS = HERE / "models"
+import sys
+
+# "SRS Door.exe" carries the models inside itself and unpacks them to sys._MEIPASS when it starts
+MODELS = (Path(sys._MEIPASS) if getattr(sys, "frozen", False) else Path(__file__).resolve().parent) / "models"
 DETECTOR_MODEL = MODELS / "face_detection_yunet_2023mar.onnx"
 RECOGNIZER_MODEL = MODELS / "face_recognition_sface_2021dec.onnx"
 
