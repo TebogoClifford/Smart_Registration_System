@@ -190,6 +190,36 @@ test('bookings can be listed for a date range (calendar month)', async () => {
   assert.strictEqual((await call('GET', `/api/bookings?date=${DAY}&from=${DAY}`)).status, 400);
 });
 
+test('a booking can be moved to another hall/day/session; students are seated again or nothing changes', async () => {
+  const id = ctx.bookB.id; // module B: students 4-5, booked in the big hall on DAY at 09:00
+  const put = (body) => call('PUT', `/api/bookings/${id}`, body);
+  // move to the small hall: both students get seats there, the big hall frees theirs
+  let r = await put({ venueId: ctx.small.id, date: DAY, slot: '09:00' });
+  assert.strictEqual(r.status, 200, JSON.stringify(r.json));
+  assert.strictEqual(r.json.venue_id, ctx.small.id);
+  assert.strictEqual(r.json.seats, 2);
+  assert.deepStrictEqual((await call('GET', `/api/bookings/${id}`)).json.seatList.map((s) => s.seat_number), [1, 2]);
+  assert.strictEqual((await call('GET', `/api/bookings/availability?venueId=${ctx.big.id}&date=${DAY}&slot=09:00`)).json.reserved, 3);
+  // 13:00 on DAY: students 4-5 already sit module C then -> refused, booking unchanged
+  r = await put({ venueId: ctx.big.id, date: DAY, slot: '13:00' });
+  assert.strictEqual(r.status, 409);
+  assert.match(r.json.error, /already sit another exam/);
+  const still = (await call('GET', `/api/bookings/${id}`)).json;
+  assert.strictEqual(still.venue_id, ctx.small.id);
+  assert.strictEqual(still.slot, '09:00');
+  assert.strictEqual(still.seats, 2);
+  // validation
+  assert.strictEqual((await put({ venueId: ctx.big.id, date: DAY, slot: '11:00' })).status, 400);
+  assert.strictEqual((await put({ venueId: ctx.big.id, date: '2031-02-31', slot: '09:00' })).status, 400);
+  assert.strictEqual((await call('PUT', '/api/bookings/999999', { venueId: ctx.big.id, date: DAY, slot: '09:00' })).status, 404);
+  // module A cannot be moved onto a session where module A is already booked (only one booking, so moving onto itself is fine)
+  assert.strictEqual((await call('PUT', `/api/bookings/${ctx.bookA.id}`, { venueId: ctx.big.id, date: DAY, slot: '09:00' })).status, 200);
+  // back to where it was
+  r = await put({ venueId: ctx.big.id, date: DAY, slot: '09:00' });
+  assert.strictEqual(r.status, 200);
+  assert.deepStrictEqual((await call('GET', `/api/bookings/${id}`)).json.seatList.map((s) => s.seat_number), [4, 5]);
+});
+
 test('enrolling a student later in a booked module gives them the next free seat', async () => {
   const late = (await call('POST', '/api/students', { student_number: `${tag}L`, name: 'Late', device_id: ctx.device.id })).json;
   assert.strictEqual((await call('PUT', `/api/students/${late.id}/modules`, { moduleIds: [ctx.modA.id] })).status, 200);

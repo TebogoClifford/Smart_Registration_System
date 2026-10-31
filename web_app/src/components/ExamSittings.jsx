@@ -1,8 +1,9 @@
-import { Clock, MapPin } from 'lucide-react';
+import { Clock, MapPin, Pencil } from 'lucide-react';
 import { hallColour } from '@/lib/exams';
 
 // A list of exam sittings (hall + session) with the modules in each and how full the hall is.
-export default function ExamSittings({ sittings, showDate = false, formatDate, className = 'space-y-3' }) {
+// With `onEdit(bookingId)` every module gets an Edit button (the exam calendar uses this).
+export default function ExamSittings({ sittings, showDate = false, formatDate, className = 'space-y-3', onEdit }) {
   return (
     <ul className={className}>
       {sittings.map((s) => {
@@ -16,8 +17,14 @@ export default function ExamSittings({ sittings, showDate = false, formatDate, c
             </div>
             <div className="mt-2 flex flex-wrap gap-1.5">
               {s.modules.map((m) => (
-                <span key={m.id} title={m.name} className="rounded border border-current/15 bg-white/70 px-1.5 py-0.5 text-xs">
+                <span key={m.id} title={m.name} className="inline-flex items-center gap-1 rounded border border-current/15 bg-white/70 px-1.5 py-0.5 text-xs">
                   <span className="font-mono font-semibold">{m.code}</span> <span className="opacity-75">{m.seats} seats</span>
+                  {onEdit && (
+                    <button type="button" onClick={() => onEdit(m.id)} aria-label={`Edit ${m.code} exam`}
+                      className="-my-0.5 ml-0.5 inline-flex items-center gap-0.5 rounded px-1 py-0.5 font-semibold hover:bg-current/10">
+                      <Pencil size={11} /> Edit
+                    </button>
+                  )}
                 </span>
               ))}
             </div>

@@ -160,6 +160,8 @@ const api = {
   async getAvailability(venueId, date, slot) { return (await http.get('/api/bookings/availability', { params: { venueId, date, slot } })).data; },
   async createBooking(moduleId, venueId, date, slot) { return (await http.post('/api/bookings', { moduleId, venueId, date, slot })).data; },
   async cancelBooking(id) { return (await http.delete(`/api/bookings/${id}`)).data; },
+  // move a booking to another hall / day / session; the module's students are seated again
+  async updateBooking(id, venueId, date, slot) { return (await http.put(`/api/bookings/${id}`, { venueId, date, slot })).data; },
   // ---- courses, recognitions and enrolment photos
   async getCourses() { return (await http.get('/api/courses')).data; },
   async getRecognitions(limit = 8) { return (await http.get('/api/access-events/recognitions', { params: { limit } })).data; },

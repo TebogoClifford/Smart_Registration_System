@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import ConfirmDeleteDialog from '@/components/ConfirmDeleteDialog';
+import EditBookingDialog from '@/components/EditBookingDialog';
 import { api } from '@/lib/api';
 
 const SLOTS = [{ value: '09:00', label: '09:00 session' }, { value: '13:00', label: '13:00 session' }];
@@ -28,6 +29,7 @@ export default function Bookings() {
   const [saving, setSaving] = useState(false);
   const [expanded, setExpanded] = useState(null);
   const [seatList, setSeatList] = useState([]);
+  const [editing, setEditing] = useState(null); // booking open in the Edit exam dialog
 
   const loadBookings = useCallback(async () => {
     try { setBookings(await api.getBookings()); } catch (err) { toast.error(err.message); }
@@ -157,6 +159,7 @@ export default function Bookings() {
                       <TableCell>{b.remaining} / {b.venue_capacity}</TableCell>
                       <TableCell className="space-x-2 text-right">
                         <Button variant="outline" size="sm" onClick={() => toggleSeats(b.id)}>{expanded === b.id ? 'Hide seats' : 'Seats'}</Button>
+                        <Button variant="outline" size="sm" onClick={() => setEditing(b)}>Edit</Button>
                         <ConfirmDeleteDialog label="Cancel booking" title="Cancel booking" itemName={`${b.module_code} on ${b.exam_date} at ${b.slot}`} onConfirm={() => cancel(b.id)} />
                       </TableCell>
                     </TableRow>
@@ -183,6 +186,10 @@ export default function Bookings() {
           )}
         </CardContent>
       </Card>
+      {editing && (
+        <EditBookingDialog booking={editing} venues={venues} onClose={() => setEditing(null)}
+          onSaved={() => { setEditing(null); setExpanded(null); loadAll(); loadAvail(); }} />
+      )}
     </div>
   );
 }

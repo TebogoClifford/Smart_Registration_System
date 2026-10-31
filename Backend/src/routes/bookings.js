@@ -143,6 +143,35 @@ router.post('/', async (req, res) => {
   } catch (err) { handleDbError(res, err); }
 });
 
+// PUT /api/bookings/:id  { venueId, date, slot } — move a booking to another hall, day or session.
+// Every student of the module is seated again in the new place; if they do not fit, or a student
+// already sits another exam then, nothing changes (409). Open to administrators and invigilators.
+router.put('/:id', async (req, res) => {
+  const { venueId, date, slot } = req.body ?? {};
+  if (!isId(venueId)) return res.status(400).json({ error: 'venueId is required' });
+  if (!isValidDate(date)) return res.status(400).json({ error: 'date must be a real date in YYYY-MM-DD format' });
+  if (!SLOTS.includes(slot)) return res.status(400).json({ error: `slot must be one of ${SLOTS.join(', ')}` });
+  const id = Number(req.params.id), vId = Number(venueId);
+  try {
+    await inTransaction(prisma, async (tx) => {
+      const b = await tx.exam_bookings.findUnique({ where: { id }, select: { id: true, module_id: true, modules: { select: { code: true } } } });
+      if (!b) throw new HttpError(404, 'booking not found');
+      const ven = await tx.venues.findUnique({ where: { id: vId }, select: { id: true, name: true, capacity: true } });
+      if (!ven) throw new HttpError(404, 'venue not found');
+      if (ven.capacity < 1) throw new HttpError(409, `${ven.name} has no capacity set. Edit the venue and enter its number of seats first.`);
+      await lockSession(tx, vId, date, slot);
+      const dup = await tx.exam_bookings.findFirst({ where: { module_id: b.module_id, exam_date: toDbDate(date), slot, id: { not: id } }, select: { id: true } });
+      if (dup) throw new HttpError(409, `${b.modules.code} is already booked for ${date} at ${slot}.`);
+      // free the old seats, move the booking, seat everyone again (all or nothing)
+      await tx.seat_reservations.deleteMany({ where: { booking_id: id } });
+      await tx.exam_bookings.update({ where: { id }, data: { venue_id: vId, exam_date: toDbDate(date), slot } });
+      failIfProblems(await assignSeats(tx, { id, module_id: b.module_id, venue_id: vId, exam_date: date, slot }), ven.name);
+    });
+    const [row] = await listBookings({ id });
+    res.json(row);
+  } catch (err) { handleDbError(res, err); }
+});
+
 // DELETE /api/bookings/:id — cancel; the seats are freed
 router.delete('/:id', async (req, res) => {
   try {

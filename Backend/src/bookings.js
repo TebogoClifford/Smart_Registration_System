@@ -68,25 +68,26 @@ async function assignSeats(tx, booking, onlyStudentId = null) {
     orderBy: [{ students: { student_number: 'asc' } }, { student_id: 'asc' }],
   });
 
-  const assigned = [], clashes = [], noSeat = [];
+  // students who already sit another exam in this date/slot, in one query
+  const busy = new Map((await tx.seat_reservations.findMany({
+    where: { student_id: { in: members.map((m) => m.students.id) }, exam_date: toDbDate(booking.exam_date), slot: booking.slot },
+    select: { student_id: true, exam_bookings: { select: { modules: { select: { code: true } } } } },
+  })).map((r) => [r.student_id, r.exam_bookings.modules.code]));
+
+  const assigned = [], clashes = [], noSeat = [], rows = [];
   let next = 1;
   for (const { students: st } of members) {
-    const clash = await tx.seat_reservations.findFirst({
-      where: { student_id: st.id, exam_date: toDbDate(booking.exam_date), slot: booking.slot },
-      select: { exam_bookings: { select: { modules: { select: { code: true } } } } },
-    });
-    if (clash) { clashes.push({ ...st, otherModule: clash.exam_bookings.modules.code }); continue; }
+    if (busy.has(st.id)) { clashes.push({ ...st, otherModule: busy.get(st.id) }); continue; }
     while (used.has(next)) next++;
     if (next > capacity) { noSeat.push(st); continue; }
-    await tx.seat_reservations.create({
-      data: {
-        booking_id: booking.id, student_id: st.id, venue_id: booking.venue_id,
-        exam_date: toDbDate(booking.exam_date), slot: booking.slot, seat_number: next,
-      },
+    rows.push({
+      booking_id: booking.id, student_id: st.id, venue_id: booking.venue_id,
+      exam_date: toDbDate(booking.exam_date), slot: booking.slot, seat_number: next,
     });
     used.add(next);
     assigned.push({ ...st, seat: next });
   }
+  if (rows.length) await tx.seat_reservations.createMany({ data: rows }); // one insert for every seat
   return { assigned, clashes, noSeat, capacity, free: capacity - used.size };
 }
 

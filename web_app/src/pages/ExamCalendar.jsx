@@ -5,6 +5,7 @@ import { ChevronLeft, ChevronRight, CalendarPlus, CalendarDays } from 'lucide-re
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import ExamSittings from '@/components/ExamSittings';
+import EditBookingDialog from '@/components/EditBookingDialog';
 import { api } from '@/lib/api';
 import { localDate, parseDate, addDays, formatDay, hallColour, groupSittings } from '@/lib/exams';
 
@@ -25,10 +26,15 @@ export default function ExamCalendar() {
   const [selected, setSelected] = useState(today);
   const [bookings, setBookings] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [venues, setVenues] = useState([]);
+  const [editing, setEditing] = useState(null); // booking open in the Edit exam dialog
+  const [reload, setReload] = useState(0);
 
   const days = useMemo(() => monthGrid(month), [month]);
   const from = localDate(days[0]);
   const to = localDate(days[days.length - 1]);
+
+  useEffect(() => { api.getVenues().then(setVenues).catch(() => {}); }, []);
 
   useEffect(() => {
     // a slow answer for a month the user has already left must not overwrite the current one
@@ -39,7 +45,16 @@ export default function ExamCalendar() {
       .catch((err) => { if (current) toast.error(err.message); })
       .finally(() => { if (current) setLoading(false); });
     return () => { current = false; };
-  }, [from, to]);
+  }, [from, to, reload]);
+
+  // after a move, show the exam's new day (and month)
+  const moved = (row) => {
+    setEditing(null);
+    setSelected(row.exam_date);
+    const d = parseDate(row.exam_date);
+    if (d.getMonth() !== month.getMonth() || d.getFullYear() !== month.getFullYear()) setMonth(new Date(d.getFullYear(), d.getMonth(), 1, 12));
+    setReload((n) => n + 1);
+  };
 
   const sittings = useMemo(() => groupSittings(bookings), [bookings]);
   const byDay = useMemo(() => {
@@ -122,11 +137,12 @@ export default function ExamCalendar() {
         </CardHeader>
         <CardContent className="space-y-4">
           {selectedSittings.length > 0
-            ? <ExamSittings sittings={selectedSittings} />
+            ? <ExamSittings sittings={selectedSittings} onEdit={(id) => setEditing(bookings.find((b) => b.id === id) ?? null)} />
             : <div className="flex flex-col items-center py-6 text-center text-muted-foreground"><CalendarDays size={26} className="mb-2 opacity-50" /><span className="text-sm">Nothing scheduled.</span></div>}
           <Button className="w-full" onClick={() => navigate(`/bookings?date=${selected}`)}><CalendarPlus /> Book an exam on this day</Button>
         </CardContent>
       </Card>
+      {editing && <EditBookingDialog booking={editing} venues={venues} onClose={() => setEditing(null)} onSaved={moved} />}
     </div>
   );
 }
