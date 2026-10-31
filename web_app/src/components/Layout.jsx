@@ -1,21 +1,46 @@
 import { Link, Outlet, useLocation } from 'react-router-dom';
-import { LayoutDashboard, MapPin, Users, UserPlus, LogOut, ShieldCheck, ChevronRight, Sparkles, BookOpen, CalendarCheck, CalendarDays, KeyRound, UserCog } from 'lucide-react';
+import { LayoutDashboard, MapPin, Users, LogOut, ShieldCheck, ChevronRight, CalendarCheck, KeyRound, UserCog } from 'lucide-react';
 import { useAuth } from '@/lib/auth';
 
 const VERSION = 'v1.2.0-beta';
 const initialsOf = (name = '') => name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?';
 
+// One sidebar entry per section. A section with `tabs` shows them above its pages;
+// `match` lists every address that belongs to the section (so /students/12 is still "Students").
 const allNavItems = [
-  { path: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { path: '/venues', label: 'Venues & Devices', icon: MapPin },
-  { path: '/students', label: 'Students', icon: Users },
-  { path: '/enroll', label: 'Enrollment', icon: UserPlus },
-  { path: '/modules', label: 'Modules', icon: BookOpen },
-  { path: '/bookings', label: 'Exam Bookings', icon: CalendarCheck },
-  { path: '/calendar', label: 'Exam Calendar', icon: CalendarDays },
-  { path: '/users', label: 'Accounts', icon: KeyRound, adminOnly: true },
-  { path: '/account', label: 'My account', icon: UserCog },
+  { path: '/', label: 'Dashboard', icon: LayoutDashboard, match: [] },
+  { path: '/venues', label: 'Venues & Devices', icon: MapPin, match: ['/venues', '/devices'] },
+  {
+    path: '/students', label: 'Students', icon: Users, match: ['/students', '/enroll', '/modules'],
+    tabs: [{ path: '/students', label: 'Student list' }, { path: '/enroll', label: 'Enrolment' }, { path: '/modules', label: 'Modules' }],
+  },
+  {
+    path: '/bookings', label: 'Exam', icon: CalendarCheck, match: ['/bookings', '/calendar'],
+    tabs: [{ path: '/bookings', label: 'Exam bookings' }, { path: '/calendar', label: 'Exam calendar' }],
+  },
+  { path: '/users', label: 'Accounts', icon: KeyRound, adminOnly: true, match: ['/users'] },
+  { path: '/account', label: 'My account', icon: UserCog, match: ['/account'] },
 ];
+
+const under = (pathname, base) => pathname === base || pathname.startsWith(`${base}/`);
+const isInSection = (pathname, item) => (item.path === '/' ? pathname === '/' : item.match.some((m) => under(pathname, m)));
+
+// The tab row of a section (Student list · Enrolment · Modules, or Exam bookings · Exam calendar).
+function SectionTabs({ tabs, pathname }) {
+  return (
+    <nav aria-label="Section tabs" className="mb-5 flex gap-1 overflow-x-auto overflow-y-hidden border-b border-slate-200">
+      {tabs.map((t) => {
+        const active = under(pathname, t.path);
+        return (
+          <Link key={t.path} to={t.path} aria-current={active ? 'page' : undefined}
+            className={`-mb-px whitespace-nowrap border-b-2 px-4 py-2.5 text-sm font-semibold transition-colors ${active ? 'border-blue-600 text-blue-700' : 'border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800'}`}>
+            {t.label}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
 
 function BrandMark({ small = false }) {
   return (
@@ -35,19 +60,11 @@ export default function Layout() {
   const { user, isAdmin, authRequired, logout } = useAuth();
   const navItems = allNavItems.filter((item) => !item.adminOnly || isAdmin);
   const roleLabel = user?.role === 'admin' ? 'Administrator' : 'Invigilator';
-  const currentPage = navItems.find((item) => item.path === '/'
-    ? location.pathname === '/'
-    : item.path === '/venues'
-      ? location.pathname.startsWith('/venues') || location.pathname.startsWith('/devices')
-      : location.pathname === item.path || location.pathname.startsWith(`${item.path}/`)) || navItems[0];
+  const currentPage = navItems.find((item) => isInSection(location.pathname, item)) || navItems[0];
 
   const renderNavItem = (item) => {
     const Icon = item.icon;
-    const isActive = item.path === '/'
-      ? location.pathname === '/'
-      : item.path === '/venues'
-        ? location.pathname.startsWith('/venues') || location.pathname.startsWith('/devices')
-        : location.pathname === item.path || location.pathname.startsWith(`${item.path}/`);
+    const isActive = isInSection(location.pathname, item);
 
     return (
       <Link key={item.path} to={item.path} aria-current={isActive ? 'page' : undefined}
@@ -76,11 +93,6 @@ export default function Layout() {
         </nav>
 
         <div className="sidebar-bottom">
-          <div className="sidebar-tip">
-            <span className="tip-icon"><Sparkles size={16} /></span>
-            <p className="text-sm font-semibold">Stay in control</p>
-            <p className="mt-1 text-xs leading-relaxed text-slate-500">Manage access, venues and enrolments from one place.</p>
-          </div>
           <div className="user-card">
             <Link to="/account" className="flex min-w-0 flex-1 items-center gap-3" aria-label="My account">
               <div className="user-avatar">{initialsOf(user?.name)}</div>
@@ -123,6 +135,7 @@ export default function Layout() {
             </div>
             <div className="secure-pill"><ShieldCheck size={15} /> <span>{roleLabel} workspace</span></div>
           </div>
+          {currentPage.tabs && <SectionTabs tabs={currentPage.tabs} pathname={location.pathname} />}
           <Outlet />
           <footer className="app-footer">
             <span>Smart Registration System</span>

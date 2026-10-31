@@ -70,7 +70,7 @@ UNKNOWN_GONE_SECONDS = 2     # an unrecognised face is logged once, again only a
 GATE_SECONDS = 6             # with an Arduino: how long a READY stays valid without a decision
 SESSION_REFRESH = 120        # seconds
 ROSTER_REFRESH = 300
-VIDEO_W, VIDEO_H = 640, 480  # size of the video panel
+VIDEO_W, VIDEO_H = 320, 240  # size of the video panel (display only: recognition uses the full camera picture)
 
 LOG = deque(maxlen=300)      # shown in the window's activity panel
 
@@ -244,7 +244,7 @@ class Backend(threading.Thread):
                     self.online, self.last_error = False, str(err)
                 log("backend problem:", err)
                 if err.status in (401, 404):
-                    log("check device_id and device_key: the server does not accept them")
+                    log(key_help(self.client.device_id))
                 self.stop.wait(5)
                 continue
             except Exception as err:  # never let the worker die silently
@@ -654,23 +654,23 @@ class DoorWindow:
         # right: video on top, then the decision banner and the camera picker
         right = tk.Frame(root, bg=BG)
         right.grid(row=1, column=1, sticky="n", padx=(6, 12), pady=12)
-        # a blank image keeps the panel 640x480 pixels even while only text is shown
+        # a blank image keeps the panel VIDEO_W x VIDEO_H pixels even while only text is shown
         self._blank = tk.PhotoImage(width=VIDEO_W, height=VIDEO_H)
         self.video = tk.Label(right, bg="#111827", fg="#9ca3af", image=self._blank, borderwidth=0,
-                              text="Starting camera…", font=("Segoe UI", 12), compound="center", wraplength=VIDEO_W - 40)
+                              text="Starting camera…", font=("Segoe UI", 11), compound="center", wraplength=VIDEO_W - 30)
         self.video.grid(row=0, column=0, sticky="n")
-        self.banner = tk.Label(right, text="Ready", bg=IDLE_BG, fg=INK, font=("Segoe UI Semibold", 16),
-                               height=3, justify="center")
+        self.banner = tk.Label(right, text="Ready", bg=IDLE_BG, fg=INK, font=("Segoe UI Semibold", 12),
+                               height=3, justify="center", wraplength=VIDEO_W - 10)
         self.banner.grid(row=1, column=0, sticky="ew", pady=(8, 8))
         # recognition is off at start: enrolment always works, door decisions only while this is on
         self.recog_btn = tk.Button(right, text="▶  Start recognition", command=self._toggle_recognition,
                                    bg=OK_BG, fg="white", activebackground=OK_BG, activeforeground="white",
-                                   font=("Segoe UI Semibold", 13), relief="flat", cursor="hand2", pady=6)
+                                   font=("Segoe UI Semibold", 11), relief="flat", cursor="hand2", pady=4)
         self.recog_btn.grid(row=2, column=0, sticky="ew", pady=(0, 8))
         camrow = tk.Frame(right, bg=BG)
         camrow.grid(row=3, column=0, sticky="ew")
         tk.Label(camrow, text="Camera", bg=BG, fg=INK).pack(side="left")
-        self.cam_pick = ttk.Combobox(camrow, state="readonly", width=34)
+        self.cam_pick = ttk.Combobox(camrow, state="readonly", width=22)
         self.cam_pick.pack(side="left", padx=8)
         self.cam_pick.bind("<<ComboboxSelected>>", self._pick_camera)
         self.rescan_btn = ttk.Button(camrow, text="Rescan", command=self._rescan)
@@ -822,8 +822,15 @@ def run_gui(args):
     log(f"stopped ({len(backend.events)} event(s) still queued; they upload next time)")
 
 
+def key_help(device_id):
+    return (f"device key not accepted for device #{device_id}: copy the key from the web app "
+            "(Venues & Devices > PC-01 > Copy) into device_key in config.ini, then restart")
+
+
 def check(args):
     """--check: prove the URL, device id and key work, without touching the camera."""
+    if not args.key or re.search(r"paste|change|xxx|your|here", args.key, re.I):
+        raise SystemExit("device_key in config.ini is empty or still the example text.\n" + key_help(args.device_id))
     client = SrsClient(args.url, args.device_id, args.key)
     log("waiting for", args.url)
     client.wait_until_up()
@@ -849,4 +856,4 @@ if __name__ == "__main__":
     try:
         check(settings) if settings.check else run_gui(settings)
     except SrsError as e:
-        raise SystemExit(f"Backend refused: {e}")
+        raise SystemExit(f"Backend refused: {e}" + (f"\n{key_help(settings.device_id)}" if e.status in (401, 404) else ""))
