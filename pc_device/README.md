@@ -5,12 +5,13 @@
 | What happens | What you see |
 |---|---|
 | An invigilator presses **Start enrolment** on the web console's Enrolment page | The window shows *Enrolling name*, takes 5 pictures once one face is close enough, and the web page changes to **Enrolled** |
-| The new face looks like a student already stored on this PC | Enrolment pauses and a **Possible duplicate face** window shows both faces, their embeddings as colour strips and the similarity. Press **Same person · reject enrolment** (reported as *failed*) or **Different people · enrol anyway**. Closing the window or pressing **Skip** rejects |
+| The new face is already enrolled for another student on this PC | The enrolment is **rejected** (reported as *failed*): one face belongs to one student only. An **Enrolment rejected** window shows both faces, their embeddings as colour strips and the similarity, so you can see why. If the stored face is on the wrong student, re-enrol or delete that student first |
 | **Start recognition** is pressed (recognition is **off** when the program starts) | The door begins scanning faces. Press **Stop recognition** to pause it; enrolment works either way |
 | An enrolled student walks up | **RECOGNISED name**, with *seat N · module* when they have a seat in this hall's current exam session (09:00 before 12:00, 13:00 after), or *no exam seat in this session*. Every enrolled student is let in once per session; the web console shows who has no seat |
 | The same student again in that session | **ALREADY INSIDE** (amber) |
 | After their session has ended (12:00 / 16:00) | **SESSION ENDED** – they were signed out automatically and are not let in again |
 | A face that matches nobody | **NOT RECOGNISED** |
+| A face that matches two enrolled students (stored before the one-face rule) | **NOT RECOGNISED** with both student numbers: check the card, then re-enrol or delete the wrong student |
 | Every decision | Appears on the web console's Dashboard. While offline, decisions are queued on disk and uploaded later (never twice) |
 
 Face embeddings (the 128 numbers that describe a face) stay on this PC in `data/embeddings/`, the enrolment photos in `data/photos/`. The backend only stores the result and one photo for re-enrolment.
@@ -78,8 +79,11 @@ Serial messages (9600 baud, one per line) are listed at the top of `srs_door.ino
 * Matching uses SFace cosine similarity with threshold 0.40 (`MATCH_THRESHOLD` in `face_engine.py`). Raise it if strangers are ever accepted, lower it if enrolled students are denied.
 * Each face is compared with *every* face stored on this PC, so a stranger is never "closest" to someone by elimination. The seat list does not decide entry: it only adds the seat to the banner (see the table above).
 * **How often a decision is logged.** With the Arduino, every deliberate 1-second hold at the marker gets an answer and is logged. Without it, the same student is logged at most once every 15 seconds, a student who is already inside (or whose session ended) at most once a minute, and an unknown face once until it has left the picture for 2 seconds.
-* **Duplicate check at enrolment:** the averaged new embedding is compared with every face stored on this PC (except the
-  student's own, so re-enrolling is fine). Anything at or above `DUPLICATE_THRESHOLD` (0.40, the same as the door, in
-  `face_engine.py`) needs a person's decision. What was compared and decided is saved in the new
-  `data/embeddings/<number>.json` under `duplicateCheck`. Only faces on *this* PC are checked: embeddings never leave it.
-* `python srs_pc_app.py --check` also lists look-alike pairs among the faces already stored.
+* **One face, one student.** Each student has exactly one embedding (`data/embeddings/<number>.json`; re-enrolling
+  replaces it). A new enrolment is compared with every face stored on this PC (except the student's own); at or above
+  `DUPLICATE_THRESHOLD` (0.40, the same as the door, in `face_engine.py`) it is rejected. `FaceStore.add` enforces the
+  same rule, so a duplicate can never be saved, and at the door a face that matches two students is refused. What was
+  compared is saved in the new embedding file under `duplicateCheck`. Only faces on *this* PC are compared: embeddings
+  never leave it.
+* At start-up and with `python srs_pc_app.py --check` the program lists any face stored for two students (for example
+  enrolled before this rule), so the wrong one can be re-enrolled or deleted.

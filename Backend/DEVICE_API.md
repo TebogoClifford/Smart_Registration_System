@@ -59,7 +59,7 @@ Sessions end at 12:00 (`09:00` slot) and 16:00 (`13:00` slot): everyone let in i
 * `alreadyInside` – ids of students let in during this session at any door (empty once it has ended), so a restarted device still answers "already inside".
 * `sessionEndedFor` – between 12:00 and 13:00: ids of students whose morning exam is over and who have no afternoon seat.
 
-**How the PC program decides** (`pc_device/srs_pc_app.py`): a face is compared with every face stored on the PC. No match → `denied`. A match → `granted` once per session (the banner adds the seat from `students` when there is one, or "no exam seat in this session"); seen again in the same session → `already`; after their session has ended → `ended`. The seat list does not decide entry: the invigilator sees on the web console who has no seat.
+**How the PC program decides** (`pc_device/srs_pc_app.py`): a face is compared with every face stored on the PC. No match → `denied`; a face that matches two enrolled students → `denied` too (one face belongs to one student). One match → `granted` once per session (the banner adds the seat from `students` when there is one, or "no exam seat in this session"); seen again in the same session → `already`; after their session has ended → `ended`. The seat list does not decide entry: the invigilator sees on the web console who has no seat.
 
 ### POST /api/access-events
 One decision. Body:
