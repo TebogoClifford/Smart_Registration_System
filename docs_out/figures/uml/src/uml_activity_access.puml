@@ -1,61 +1,54 @@
 @startuml
 !include style.iuml
-!pragma useVerticalIf on
+skinparam ActivityFontSize 13
+skinparam ArrowFontSize 12
 |Student|
 start
 :Walk up to the door unit;
 |Arduino door unit|
 repeat
-  :Measure distance (HC-SR04, every 60 ms);
-  if (distance?) then ([< 25 cm])
-    :LCD "Too close / Step back";
-  elseif () then ([> 50 cm])
+  :Measure distance\n(HC-SR04, every 60 ms);
+  switch (distance?)
+  case ([< 25 cm])
+    :LCD "Too close";
+  case ([> 50 cm])
     :LCD "Come closer";
-  else ([25-50 cm])
-    :LCD "Hold still" + progress bar;
-  endif
+  case ([25-50 cm])
+    :LCD "Hold still";
+  endswitch
 repeat while (held in window for 1 s?) is ([no]) not ([yes])
-:Beep; send READY over USB serial;
+:Beep and send READY;
 |PC door program|
 :Capture webcam frame;
-:Detect largest face (YuNet);
-:Compute 128-number embedding (SFace);
-:Compare with ALL faces stored on this PC;
-if (best cosine similarity >= 0.40\nand same answer in 3 frames?) then ([no])
-  :decision = denied\n"NOT RECOGNISED";
+:Detect largest face (YuNet)\nand compute embedding (SFace);
+:Compare with all faces\nstored on this PC;
+if (similarity >= 0.40\nin 3 frames in a row?) then ([no])
+  :decision = denied;
 else ([yes])
-  if (session over or student\nsigned out for this session?) then ([yes])
-    :decision = ended\n"SESSION ENDED";
-  elseif (already let in\nthis session?) then ([yes])
-    :decision = already\n"ALREADY INSIDE";
+  if (session over?) then ([yes])
+    :decision = ended;
   else ([no])
-    :decision = granted\nshow seat N + module\nor "no exam seat in this session";
+    if (already let in\nthis session?) then ([yes])
+      :decision = already;
+    else ([no])
+      :decision = granted\n(show seat N + module);
+    endif
   endif
 endif
 fork
-  :Send G / D / A to Arduino;
+  :Send G / D / A\nto the Arduino;
   |Arduino door unit|
-  :Show result on LCD and beep;
-  :Wait until student steps beyond 65 cm;
-fork again
-  |PC door program|
-  :Add event to queue on disk;
-  if (online?) then ([yes])
-    :POST /api/access-events;
-    |Backend|
-    :Validate device key;
-    :Store event (unique client_event_id);
-    :Dashboard shows the event;
+  :Show result on LCD\nand beep;
+  |Student|
+  if (decision = granted?) then ([yes])
+    :Enter the venue;
   else ([no])
-    |PC door program|
-    :Keep in queue; upload later in a batch;
+    :Show student card\nto the invigilator;
   endif
+fork again
+  |Backend|
+  :Store event (uploaded from the\nPC's disk queue when online,\nduplicates ignored);
+  :Show event on dashboard;
 end fork
-|Student|
-if (decision = granted?) then ([yes])
-  :Enter the venue;
-else ([no])
-  :Show student card to invigilator\n(manual check, Override);
-endif
 stop
 @enduml
