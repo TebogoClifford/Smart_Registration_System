@@ -1,0 +1,60 @@
+# build-door-exe.yml - builds "SRS Door.exe" (the PC door program with Python, every package and both face
+# models inside) on a Windows machine at GitHub, so a door PC needs nothing installed: download, double-click.
+# Runs when pc_device/ changes on main, or by hand (Actions > Build SRS Door.exe > Run workflow).
+# The newest build is always at the release "door-exe":
+#   https://github.com/TebogoClifford/Smart_Registration_System/releases/tag/door-exe
+name: Build SRS Door.exe
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['pc_device/**', '.github/workflows/build-door-exe.yml']
+
+permissions:
+  contents: write          # to replace the "door-exe" release
+
+concurrency:
+  group: build-door-exe
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build with build_exe.bat (packages, face models, PyInstaller)
+        working-directory: pc_device
+        shell: cmd
+        run: call build_exe.bat
+      - name: Smoke test - the .exe starts and writes config.ini next to itself
+        working-directory: pc_device/dist
+        shell: pwsh
+        run: |
+          # without a device key it shows "set device_id and device_key" and stops; it must not crash first
+          $p = Start-Process -FilePath ".\SRS Door.exe" -PassThru
+          $deadline = (Get-Date).AddSeconds(90)
+          while (-not (Test-Path config.ini) -and (Get-Date) -lt $deadline) { Start-Sleep 2 }
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          if (-not (Test-Path config.ini)) { throw "SRS Door.exe did not write config.ini within 90 s" }
+          Get-Content config.ini
+          Remove-Item config.ini
+          Copy-Item "SRS Door.exe" "SRS-Door.exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SRS-Door
+          path: pc_device/dist/SRS-Door.exe
+      - name: Publish as the "door-exe" release (replaces the previous build)
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete door-exe --yes --cleanup-tag 2>$null
+          $notes = "Built from $env:GITHUB_SHA. Download SRS-Door.exe, put it in a folder of its own (e.g. C:\SRS Door), " +
+                   "double-click it once, fill in device_id and device_key in the config.ini it writes, then start it again. " +
+                   "Windows SmartScreen: More info > Run anyway."
+          gh release create door-exe "pc_device/dist/SRS-Door.exe" --title "SRS Door.exe (latest build)" --notes $notes --target $env:GITHUB_SHA
