@@ -136,16 +136,47 @@ def fail(message):
 
 
 # ---------------------------------------------------------------- settings
+def blocked_folder_help(err):
+    """Windows 'Controlled folder access' protects Documents, Pictures, Music, ... from unknown programs."""
+    return (f"Windows did not let the program write {getattr(err, 'filename', '') or 'its files'} ({err}).\n"
+            "Folders like Music and Documents can be protected (Windows Security > Virus & threat protection > "
+            "Ransomware protection > Controlled folder access). Allow python.exe / SRS Door.exe there, "
+            "or move the pc_device folder to e.g. C:\\SRS.")
+
+
+def read_config():
+    """The [srs] section of config.ini. utf-8-sig also reads the file when Notepad saved it with a BOM
+    (an invisible mark at the start that otherwise hides the [srs] line); UTF-16 = Notepad's 'Unicode'."""
+    ini = configparser.ConfigParser()
+    for encoding in ("utf-8-sig", "utf-16"):
+        try:
+            ini.read(CONFIG_FILE, encoding=encoding)
+            break
+        except (UnicodeError, configparser.Error):
+            ini = configparser.ConfigParser()
+    else:
+        fail(f"{CONFIG_FILE} cannot be read. Open it in Notepad, File > Save as, Encoding: UTF-8, and start again.")
+    if CONFIG_FILE.exists() and not ini.has_section("srs"):
+        fail(f"{CONFIG_FILE} has no [srs] line at the top. Copy config.example.ini over it and fill it in again.")
+    return ini["srs"] if ini.has_section("srs") else {}
+
+
 def load_settings():
     if not CONFIG_FILE.exists() and CONFIG_EXAMPLE.exists():
-        shutil.copyfile(CONFIG_EXAMPLE, CONFIG_FILE)   # first start: a config.ini to fill in
-        print(f"created {CONFIG_FILE.name} from {CONFIG_EXAMPLE.name}: fill in device_id and device_key")
-    ini = configparser.ConfigParser()
-    ini.read(CONFIG_FILE, encoding="utf-8")
-    cfg = ini["srs"] if ini.has_section("srs") else {}
+        try:
+            shutil.copyfile(CONFIG_EXAMPLE, CONFIG_FILE)   # first start: a config.ini to fill in
+        except PermissionError as err:
+            fail(blocked_folder_help(err))
+        print(f"created {CONFIG_FILE} from {CONFIG_EXAMPLE.name}: fill in device_id and device_key")
+    cfg = read_config()
+    overridden = []   # environment variables win over config.ini: say so, they are easy to forget
 
     def pick(name, env, default=None):
-        return os.environ.get(env) or cfg.get(name) or default
+        if os.environ.get(env):
+            if cfg.get(name) and cfg.get(name) != os.environ[env]:
+                overridden.append(f"{env}={os.environ[env]} (config.ini says {name} = {cfg.get(name)})")
+            return os.environ[env]
+        return cfg.get(name) or default
 
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--url", default=pick("url", "BASE_URL", "http://localhost:3000"))
@@ -163,6 +194,7 @@ def load_settings():
     p.add_argument("--no-install", action="store_true",
                    help="do not install missing dependencies at start-up (they are still checked)")
     a = p.parse_args()
+    a.overridden = overridden
     if not a.device_id or not a.key:
         fail(f"Set device_id and device_key in {CONFIG_FILE} (or --device-id and --key)\n"
              "(an administrator copies the key from the device page in the web console), then start again.")
@@ -1269,6 +1301,7 @@ def start_door(args):
     """Start the three worker threads (server, Arduino, camera). Returns (door, backend, link)."""
     for problem in SETUP_PROBLEMS:   # already printed by check_dependencies.py; this puts them in the Activity panel
         LOG.append(f"{time.strftime('%H:%M:%S')} NOT READY: {problem}")
+    show_settings(args)
     store = FaceStore(DATA)
     warn_duplicate_faces(store)
     client = SrsClient(args.url, args.device_id, args.key)
@@ -1278,7 +1311,6 @@ def start_door(args):
     if args.serial:
         link.connect(args.serial)
     door = DoorEngine(args, backend, store, client, link)
-    log(f"backend {args.url}; device #{args.device_id}")
     backend.start()   # waits out a sleeping Render server by itself (shows OFFLINE until it answers)
     door.start()
     return door, backend, link
@@ -1291,6 +1323,21 @@ def stop_door(door, backend, link):
     link.disconnect()   # says goodbye: the Arduino's LCD shows NOT CONNECTED
     door.join(timeout=3)
     log(f"stopped ({len(backend.events)} event(s) still queued; they upload next time)")
+
+
+def show_settings(args):
+    """Log where the settings come from, and check this folder can be written (data/, config.ini)."""
+    log(f"settings: {CONFIG_FILE}" + ("" if CONFIG_FILE.exists() else " (missing: using defaults)"))
+    log(f"server: {args.url} · device #{args.device_id} · key ...{str(args.key)[-4:]}")
+    for o in args.overridden:
+        log(f"NOTE: the environment variable {o} is used instead of config.ini; remove it to use config.ini")
+    try:
+        DATA.mkdir(parents=True, exist_ok=True)
+        probe = DATA / "write_test.tmp"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+    except OSError as err:
+        log("NOT READY:", blocked_folder_help(err).replace("\n", " "))
 
 
 def run_gui(args):
@@ -1316,17 +1363,20 @@ def run_console(args):
 
 
 def key_help(device_id):
-    return (f"device key not accepted for device #{device_id}: copy the key from the web app "
-            "(Venues & Devices > this device > Reveal) into device_key in config.ini, then restart")
+    return (f"device key not accepted for device #{device_id}: on the web console open Venues & Devices > the door "
+            f"device > Reveal, and copy BOTH its number (device_id) and its key (device_key) into {CONFIG_FILE}, "
+            "then restart")
 
 
 def check(args):
     """--check: prove the URL, device id and key work, without touching the camera."""
     if not args.key or re.search(r"paste|change|xxx|your|here", args.key, re.I):
         fail("device_key in config.ini is empty or still the example text.\n" + key_help(args.device_id))
+    show_settings(args)
     client = SrsClient(args.url, args.device_id, args.key)
-    log("waiting for", args.url)
+    log("waiting for", args.url, "(a sleeping Render server takes up to a minute)")
     client.wait_until_up()
+    log("server answers")
     cfg = client.config()
     log(f"config OK: device {cfg['deviceId']} '{cfg['name']}', venue {cfg['venueId']}")
     log("heartbeat OK:", client.heartbeat()["status"])

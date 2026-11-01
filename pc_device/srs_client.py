@@ -21,7 +21,38 @@ try:
 except ImportError:   # every call then fails with SrsError, so a door program stays OFFLINE instead of crashing
     requests = None
 
+# Trust the same certificates as Windows and the browser. Without this Python only trusts its own
+# list, and on a network or antivirus that inspects HTTPS every request fails with an SSL error
+# even though the web console opens fine in the browser.
+try:
+    import truststore
+    truststore.inject_into_ssl()
+except Exception:  # noqa: BLE001 - not installed (or Python < 3.10): Python's own list is used
+    pass
+
 NO_REQUESTS = "the 'requests' package is not installed (pip install requests)"
+
+
+def explain(err):
+    """A network error from requests in plain words, with what to check."""
+    text = str(err)
+    if isinstance(err, requests.exceptions.SSLError):
+        return ("the secure (HTTPS) connection was refused: certificate not trusted. A school/work network or an "
+                "antivirus that scans HTTPS does this; pip install truststore (done at start-up) fixes it on "
+                f"Python 3.10+ ({text[:160]})")
+    if isinstance(err, requests.exceptions.ProxyError):
+        return f"the proxy server refused the connection: check the Windows proxy settings ({text[:160]})"
+    if isinstance(err, requests.exceptions.Timeout):
+        return ("no answer in time: the free Render server takes up to a minute to wake up, "
+                f"it keeps trying ({text[:120]})")
+    if isinstance(err, requests.exceptions.InvalidURL) or isinstance(err, requests.exceptions.MissingSchema):
+        return f"the url in config.ini is not a valid address ({text[:160]})"
+    if "getaddrinfo" in text or "NameResolution" in text or "Name or service not known" in text:
+        return "the server name cannot be found: no internet on this PC, or a typing mistake in url in config.ini"
+    if "refused" in text.lower():
+        return ("nothing answers at that address: check url in config.ini (http://localhost:3000 only works "
+                "while the backend runs on this PC)")
+    return text[:240]
 
 
 class SrsError(Exception):
@@ -53,7 +84,7 @@ class SrsClient:
             try:
                 res = self.http.request(method, self.base + path, timeout=self.timeout, **kwargs)
             except requests.RequestException as err:
-                last = SrsError(f"{method} {path}: cannot reach the server ({err})")
+                last = SrsError(f"cannot reach {self.base}: {explain(err)}")
             else:
                 if res.status_code < 400:
                     return res.json() if res.content else None
@@ -72,16 +103,22 @@ class SrsClient:
         """Call GET /health until the backend answers (it may be waking up). Returns True when ready."""
         if requests is None:
             raise SrsError(NO_REQUESTS)
-        deadline = time.time() + max_wait
+        deadline, why = time.time() + max_wait, "no answer"
         while time.time() < deadline:
             try:
                 res = requests.get(self.base + "/health", timeout=15)
                 if res.ok and res.json().get("status") == "ok":
                     return True
-            except (requests.RequestException, ValueError):
-                pass
+                why = f"{self.base}/health answered {res.status_code}: is url in config.ini the SRS backend?"
+            except ValueError:
+                why = f"{self.base}/health did not answer like the SRS backend: check url in config.ini"
+            except (requests.exceptions.SSLError, requests.exceptions.InvalidURL,
+                    requests.exceptions.MissingSchema) as err:
+                raise SrsError(f"cannot reach {self.base}: {explain(err)}")   # waiting will not fix these
+            except requests.RequestException as err:
+                why = explain(err)
             time.sleep(3)
-        raise SrsError(f"backend did not answer /health within {max_wait} s")
+        raise SrsError(f"backend did not answer within {max_wait} s. Last problem: {why}")
 
     # ---------- device endpoints ----------
     def config(self):

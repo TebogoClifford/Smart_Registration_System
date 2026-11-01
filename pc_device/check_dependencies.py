@@ -39,6 +39,7 @@ WITHOUT = {
     "numpy": "no camera picture, no enrolment, no face recognition",
     "requests": "no connection to the server: decisions are queued on this PC until it is installed",
     "pyserial": "no Arduino door unit (the program scans faces without it)",
+    "truststore": "Python only trusts its own certificate list: on networks that inspect HTTPS the server cannot be reached",
 }
 PIP_TIMEOUT = 600   # seconds for the whole pip run (OpenCV is about 40 MB)
 
@@ -48,12 +49,21 @@ def say(text):
 
 
 # ---------------------------------------------------------------- requirements.txt
+def _marker_applies(marker):
+    """Only the marker requirements.txt uses: python_version >= "3.10". Anything else counts as true."""
+    m = re.match(r"""python_version\s*>=\s*["']([0-9.]+)["']""", marker.strip())
+    return not m or sys.version_info[:2] >= _version_tuple(m.group(1))
+
+
 def read_requirements(path=REQUIREMENTS):
-    """[(pip name, minimum version or None, full requirement line)] from requirements.txt."""
+    """[(pip name, minimum version or None, full requirement line)] from requirements.txt.
+    Lines whose marker does not apply to this Python (e.g. python_version >= "3.10") are left out."""
     reqs = []
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.split("#", 1)[0].strip()          # drop comments
         if not line:
+            continue
+        if ";" in line and not _marker_applies(line.split(";", 1)[1]):
             continue
         m = re.match(r"^([A-Za-z0-9_.-]+)\s*(?:>=\s*([0-9][0-9.]*))?", line)
         if m:
@@ -172,6 +182,10 @@ def ensure_dependencies(install_missing=True, models=True, window=True):
     Never raises. Returns a list of problems that are still there afterwards, as readable lines
     ("requests: not installed - no connection to the server ..."); an empty list means all is ready.
     models=False skips the face models, window=False skips the Tkinter check (for webcam_test.py)."""
+    if getattr(sys, "frozen", False):
+        # "SRS Door.exe" (build_exe.bat) carries every package and both models inside itself, and
+        # sys.executable is the .exe, so "-m pip" would only start the door program again
+        return []
     problems = []
     try:
         reqs = read_requirements()

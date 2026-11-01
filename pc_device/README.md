@@ -71,6 +71,22 @@ python srs_pc_app.py --no-install  # the same, but only reports missing dependen
 
 Options (or in `config.ini`): `--url`, `--device-id`, `--key`, `--camera 0` (default `auto`), `--serial COM3` (the Arduino door unit, see below), `--min-face 90` (pixels; raise it to make people step closer).
 
+## Cannot connect to the server (OFFLINE)
+Run `python srs_pc_app.py --check`. Its first lines show **which `config.ini`, server, device and key** are used, and
+when it cannot connect it says why in plain words. The same lines are at the top of the window's Activity log.
+
+| The message says | Fix |
+|---|---|
+| `device key not accepted for device #N` | `device_id` **and** `device_key` must both come from the same device on the web console (Venues & Devices → the device → Reveal). A copied folder or a new `.exe` gets a fresh `config.ini` with `device_id = 1` |
+| `NOTE: the environment variable BASE_URL=... is used instead of config.ini` | A setting left over from the demo instructions. Remove it (Windows: Settings → *Edit environment variables for your account*), then open a new terminal |
+| `nothing answers at that address` | `url` in `config.ini` is wrong; `http://localhost:3000` only works while the backend runs on this PC |
+| `the server name cannot be found` | No internet on this PC, or a typing mistake in `url` |
+| `certificate not trusted` | A school/work network or an antivirus that scans HTTPS. `truststore` (installed at start-up, Python 3.10+) makes Python trust the same certificates as Windows; on older Python, update Python |
+| `no answer in time` | The free Render server is waking up (up to a minute); it keeps trying by itself |
+| `Windows did not let the program write ...` | The folder (e.g. **Music** or Documents) is protected by *Controlled folder access*: allow `python.exe` / `SRS Door.exe` in Windows Security → Ransomware protection, or move the folder to e.g. `C:\SRS` |
+
+`config.ini` may be saved by Notepad in any encoding (UTF-8, UTF-8 with BOM, Unicode).
+
 ## Arduino door unit (optional): distance sensor and LCD
 
 `arduino/srs_door/srs_door.ino` (version 3) runs on an Arduino Mega, Uno or Nano. The student must stand 25–50 cm
