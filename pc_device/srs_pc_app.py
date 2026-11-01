@@ -5,10 +5,10 @@ It plays the ESP32-CAM's part (see Backend/DEVICE_API.md):
              the student in pending-enrollments, captures their face automatically, saves
              data/photos/<student number>.jpg and data/embeddings/<student number>.json on this PC,
              and reports "enrolled" (or "failed") and the photo back to the console.
-             DUPLICATE CHECK - before saving, the new face is compared with every face already
-             stored on this PC. If it looks like someone else's, enrolment is paused and a window
-             shows both faces (and their embeddings) side by side; the operator decides
-             "same person - reject" or "different people - enrol anyway".
+             ONE FACE, ONE STUDENT - before saving, the new face is compared with every face already
+             stored on this PC. If it matches another student's face, the enrolment is rejected
+             (reported as failed) and a window shows both faces and their embeddings side by side, so
+             the operator can see why. At the door, a face that matches two students is not accepted.
   * RECOGNISE - off at start; the "Start recognition" button turns it on. Any enrolled student
              whose face matches is RECOGNISED (granted; their seat is shown if they have one in this
              session), an unknown face is DENIED. Every decision is sent to the backend and appears
@@ -61,7 +61,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "device_client"))
 from srs_client import SrsClient, SrsError  # noqa: E402
 from arduino_link import MAX_CM, MIN_CM, ArduinoLink, available_ports, guess_arduino_port  # noqa: E402
-from face_engine import DUPLICATE_THRESHOLD, FaceEngine, FaceStore, average_embedding, embedding_strip  # noqa: E402
+from face_engine import DUPLICATE_THRESHOLD, DuplicateFaceError, FaceEngine, FaceStore, average_embedding, embedding_strip  # noqa: E402
 
 DATA = HERE / "data"
 QUEUE_FILE = DATA / "event_queue.json"
@@ -352,7 +352,7 @@ class DoorEngine(threading.Thread):
         self.unknown_logged = False
         self.face_seen_at = 0.0
         self.skip_requested = False
-        self.review_answer = None      # the operator's answer in the duplicate window: True = enrol, False = reject
+        self.last_duplicate = None     # the last enrolment rejected as a duplicate (shown in the comparison window)
         self.recognising = False       # the window's Start/Stop recognition button
         self.let_in = {}               # (date, slot) -> student ids let in here during that exam session
         self.history = deque(maxlen=50)  # (time, decision, who)
@@ -364,9 +364,6 @@ class DoorEngine(threading.Thread):
     def request_skip(self):
         self.skip_requested = True
 
-    def resolve_review(self, enrol_anyway):
-        """The operator's answer in the duplicate window (called from the window thread)."""
-        self.review_answer = bool(enrol_anyway)
 
     def toggle_recognition(self):
         self.recognising = not self.recognising
@@ -389,14 +386,14 @@ class DoorEngine(threading.Thread):
             if e:
                 enrol = dict(name=e["student"]["name"], number=e["student"]["studentNumber"],
                              samples=len(e["samples"]), hint=e.get("hint", ""),
-                             seconds_left=max(0, int(ENROL_TIMEOUT - (time.time() - e["started"]))),
-                             review=e.get("review"))   # set while a possible duplicate waits for the operator
+                             seconds_left=max(0, int(ENROL_TIMEOUT - (time.time() - e["started"]))))
             return dict(frame=self.frame, camera=self.camera_index, cameras=list(self.cameras),
                         arduino=self.link.connected, gate_open=self._gate_open(), recognising=self.recognising,
                         fps=self.fps, face_px=self.face_px,
                         camera_error=self.camera_error, enrolling=enrol,
                         result=self.result if self.result and time.time() < self.result[2] else None,
-                        faces_stored=len(self.store.people), history=list(self.history))
+                        faces_stored=len(self.store.people), history=list(self.history),
+                        last_duplicate=self.last_duplicate)
 
     # -- enrolment
     def _finish_enrolment(self, ok, why=None):
@@ -408,10 +405,14 @@ class DoorEngine(threading.Thread):
             # two files on this PC: data/photos/<number>.jpg and data/embeddings/<number>.json
             okj, jpg = cv2.imencode(".jpg", self.enrolling["frame"], [cv2.IMWRITE_JPEG_QUALITY, 85])
             photo = jpg.tobytes() if okj else None
-            self.store.add(sid, st["studentNumber"], st["name"], self.enrolling["samples"], photo_jpg=photo,
-                           duplicate_check=check)
-            log(f"saved {self.store.photo_path(st['studentNumber']).name} and the embedding for {st['studentNumber']}")
-            if photo and len(photo) < 1_000_000:
+            try:
+                self.store.add(sid, st["studentNumber"], st["name"], self.enrolling["samples"], photo_jpg=photo,
+                               duplicate_check=check)
+            except (DuplicateFaceError, ValueError) as err:     # one face, one student: never stored twice
+                ok, why, photo = False, str(err), None
+            else:
+                log(f"saved {self.store.photo_path(st['studentNumber']).name} and the embedding for {st['studentNumber']}")
+            if ok and photo and len(photo) < 1_000_000:
                 self.backend.tasks.put(lambda: self.client.upload_enrollment_image(sid, photo))
         self.backend.report_enrollment(sid, ok)
         self.handled.add(sid)
@@ -423,7 +424,8 @@ class DoorEngine(threading.Thread):
 
     def _check_duplicates(self):
         """All samples taken: compare the new face with every face stored on this PC before saving.
-        No look-alike -> enrol now. A look-alike -> pause and let the operator compare the faces."""
+        No match -> enrol now. A match with another student -> rejected (one face belongs to one student only);
+        the comparison window shows both faces so the operator can see why."""
         e = self.enrolling
         st = e["student"]
         mean = average_embedding(e["samples"])
@@ -456,27 +458,16 @@ class DoorEngine(threading.Thread):
                                face=self.engine.aligned_face(photo), strip=embedding_strip(p["embedding"]),
                                photo_file=photo_file.name if photo_file.exists() else None,
                                embedding_file=self.store.embedding_path(p["studentNumber"]).name))
-        self.review_answer = None      # forget the last answer BEFORE the window can see the new review
-        e["hint"] = "Possible duplicate: compare the faces in the pop-up window"
-        e["review"] = dict(id=time.time(), name=st["name"], number=st["studentNumber"], face=new_face,
-                           strip=embedding_strip(mean), compared=compared, matches=others)
-        log(f"POSSIBLE DUPLICATE {st['studentNumber']} {st['name']}: looks like "
-            + ", ".join(f"{m['number']} {m['name']} ({m['similarity']:.2f})" for m in others)
-            + " - waiting for the operator")
+        first = others[0]
+        e["check"]["decision"] = f"rejected: face already enrolled for {first['number']} {first['name']}"
+        self.last_duplicate = dict(id=time.time(), name=st["name"], number=st["studentNumber"], face=new_face,
+                                   strip=embedding_strip(mean), compared=compared, matches=others)
+        log(f"DUPLICATE FACE {st['studentNumber']} {st['name']}: already enrolled as "
+            + ", ".join(f"{m['number']} {m['name']} ({m['similarity']:.2f})" for m in others) + " - enrolment rejected")
+        return self._finish_enrolment(False, f"face already enrolled for {first['number']} {first['name']}")
 
     def _step_enrolment(self, frame, faces):
         e = self.enrolling
-        if e.get("review"):
-            # paused on a possible duplicate: nothing happens until the operator answers (or presses Skip)
-            first = e["review"]["matches"][0]
-            if self.skip_requested or self.review_answer is False:
-                self.skip_requested = False
-                e["check"]["decision"] = "rejected by operator: same person"
-                return self._finish_enrolment(False, f"same face as {first['number']} {first['name']}")
-            if self.review_answer:
-                e["check"]["decision"] = "enrolled by operator: different people"
-                return self._finish_enrolment(True, f"operator confirmed: not {first['name']}")
-            return
         if self.skip_requested or time.time() - e["started"] > ENROL_TIMEOUT:
             self.skip_requested = False
             return self._finish_enrolment(False)
@@ -519,13 +510,15 @@ class DoorEngine(threading.Thread):
         # "closest" to a seated student just because the real match was left out of the search
         sid, sim = self.store.best_match(self.engine.embed(frame, face))
         person = self.store.people.get(sid) if sid is not None else None
+        # one face, one student: a face that matches two enrolled students is not accepted as either
+        ambiguous = self.store.last_ambiguous
         # a student is let in once per exam session: who is in = let in here + what the server reports
         let_in = self.let_in.setdefault(session_key(session), set())
         # after the session ends (12:00 / 16:00) everyone is signed out and not let in again
         ended = sid is not None and (session_over(session) or sid in session.get("sessionEndedFor", []))
         inside = sid is not None and not ended and (sid in let_in or sid in session.get("alreadyInside", []))
         label = ((f"{person['name']} · session ended" if ended else f"{person['name']} · already inside" if inside else person["name"])
-                 if person else "not recognised")
+                 if person else "matches 2 students" if ambiguous else "not recognised")
         answer = sid if sid is not None else "unknown"
         cand, n = self.streak
         self.streak = (answer, n + 1) if cand == answer else (answer, 1)
@@ -553,6 +546,9 @@ class DoorEngine(threading.Thread):
             where = f"seat {seat['seatNumber']} · {seat['moduleCode']}" if seat else "no exam seat in this session"
             decision, text = "granted", f"RECOGNISED  {person['name']}\n{person['studentNumber']} · {where}"
             let_in.add(sid)
+        elif ambiguous:
+            a, b = (self.store.people[x] for x in ambiguous)
+            decision, text = "denied", f"NOT RECOGNISED\nface matches {a['studentNumber']} and {b['studentNumber']}: check the card"
         else:
             decision, text = "denied", "NOT RECOGNISED\nface is not enrolled"
         if sid is not None:
@@ -561,7 +557,9 @@ class DoorEngine(threading.Thread):
         if self.link.connected:
             self.link.send({"granted": "G", "already": "A"}.get(decision, "D"))
         self.result = (decision, text, now + SHOW_RESULT_SECONDS)
-        who = f"{person['studentNumber']} {person['name']}" if person else "unknown face"
+        who = (f"{person['studentNumber']} {person['name']}" if person
+               else "face matching " + " and ".join(self.store.people[x]["studentNumber"] for x in ambiguous) if ambiguous
+               else "unknown face")
         self.history.appendleft((time.strftime("%H:%M:%S"), decision, who))
         log(decision.upper(), who, f"similarity {sim:.2f}")
         return label
@@ -678,29 +676,29 @@ FACE_BOX = (168, 168)   # size of each face in the duplicate window
 
 
 class DuplicateWindow:
-    """Pop-up shown when a new enrolment looks like a face already stored on this PC: the new face and
-    each look-alike side by side, with their embeddings as colour strips and the similarity. The operator
-    decides; closing the window counts as "reject" (the safe choice; Re-enrol on the web console retries)."""
+    """Pop-up shown when an enrolment was rejected because the face is already stored for another student
+    on this PC: the new face and the enrolled one(s) side by side, with their embeddings as colour strips and
+    the similarity, so the operator can see why. One face belongs to one student only, so there is no
+    "enrol anyway": if the stored face is on the wrong student, re-enrol or delete that student first."""
 
-    def __init__(self, root, review, answer):
-        self.answer = answer            # answer(True) = enrol anyway, answer(False) = reject
+    def __init__(self, root, review):
         self.review_id = review["id"]
         self._images = []               # Tk drops images that nothing references, so keep them here
         w = self.win = tk.Toplevel(root)
-        w.title("Possible duplicate face")
+        w.title("Enrolment rejected: face already enrolled")
         w.configure(bg=PANEL, padx=16, pady=14)
-        w.protocol("WM_DELETE_WINDOW", lambda: self._decide(False))
-        w.attributes("-topmost", True)  # stay in front of the door window until answered
-        tk.Label(w, text="This face may already be enrolled to another student", bg=PANEL, fg=BAD_BG,
+        w.protocol("WM_DELETE_WINDOW", self.close)
+        w.attributes("-topmost", True)  # stay in front of the door window until closed
+        tk.Label(w, text="Enrolment rejected: this face is already enrolled for another student", bg=PANEL, fg=BAD_BG,
                  font=("Segoe UI Semibold", 14)).pack(anchor="w")
-        tk.Label(w, text=f"Compared with {review['compared']} face(s) stored on this PC. The door accepts a match at "
-                         f"similarity {DUPLICATE_THRESHOLD:.2f} or more, so it could mix these students up.",
+        tk.Label(w, text=f"Compared with {review['compared']} face(s) stored on this PC. One face may belong to one student "
+                         f"only, and the door treats a similarity of {DUPLICATE_THRESHOLD:.2f} or more as the same face.",
                  bg=PANEL, fg=MUTED, font=("Segoe UI", 10), justify="left", wraplength=640).pack(anchor="w", pady=(2, 10))
 
         cards = tk.Frame(w, bg=PANEL)
         cards.pack(anchor="w")
-        self._card(cards, 0, "NEW ENROLMENT", review["name"], review["number"], review["face"], review["strip"],
-                   ["captured just now", "not saved yet"], "#2563eb")
+        self._card(cards, 0, "REJECTED ENROLMENT", review["name"], review["number"], review["face"], review["strip"],
+                   ["captured just now", "not saved, reported as failed"], "#2563eb")
         for n, m in enumerate(review["matches"], start=1):
             files = [f"photo: data/photos/{m['photo_file']}" if m["photo_file"] else "photo: missing on this PC",
                      f"embedding: data/embeddings/{m['embedding_file']}"]
@@ -708,16 +706,11 @@ class DuplicateWindow:
                        m["face"], m["strip"], files, BAD_BG)
 
         tk.Label(w, text="The coloured strips are the 128 embedding numbers (blue = low, red = high): "
-                         "the same face gives the same pattern.\nIs the new student the same person as an enrolled one?",
+                         "the same face gives the same pattern.\nIf the enrolled face is on the wrong student, re-enrol or "
+                         "delete that student on the web console first, then press Re-enrol for this one.",
                  bg=PANEL, fg=INK, font=("Segoe UI", 10), justify="left", wraplength=640).pack(anchor="w", pady=(12, 8))
-        row = tk.Frame(w, bg=PANEL)
-        row.pack(anchor="w")
-        tk.Button(row, text="Same person · reject enrolment", command=lambda: self._decide(False), bg=BAD_BG, fg="white",
-                  activebackground=BAD_BG, activeforeground="white", relief="flat", padx=12, pady=6, cursor="hand2",
-                  font=("Segoe UI Semibold", 10)).pack(side="left")
-        tk.Button(row, text="Different people · enrol anyway", command=lambda: self._decide(True), bg=OK_BG, fg="white",
-                  activebackground=OK_BG, activeforeground="white", relief="flat", padx=12, pady=6, cursor="hand2",
-                  font=("Segoe UI Semibold", 10)).pack(side="left", padx=8)
+        tk.Button(w, text="Close", command=self.close, bg=INK, fg="white", activebackground=INK, activeforeground="white",
+                  relief="flat", padx=16, pady=6, cursor="hand2", font=("Segoe UI Semibold", 10)).pack(anchor="w")
         w.lift()
         w.focus_force()
 
@@ -739,10 +732,6 @@ class DuplicateWindow:
         tk.Label(box, text=number, bg=PANEL, fg=INK, font=("Segoe UI", 10)).pack(anchor="w")
         for line in notes:
             tk.Label(box, text=line, bg=PANEL, fg=MUTED, font=("Segoe UI", 8), wraplength=FACE_BOX[0], justify="left").pack(anchor="w")
-
-    def _decide(self, enrol_anyway):
-        self.answer(enrol_anyway)
-        self.close()
 
     def close(self):
         if self.win is not None and self.win.winfo_exists():
@@ -878,7 +867,8 @@ class DoorWindow:
         self._cams_shown = None
 
         self._photo = None
-        self.dup_win = None            # DuplicateWindow while a possible duplicate waits for an answer
+        self.dup_win = None            # DuplicateWindow showing the last rejected duplicate
+        self._dup_shown = None         # id of the duplicate already shown (each is shown once)
         self._tick_n = 0
         root.protocol("WM_DELETE_WINDOW", self.close)
         root.bind("<Escape>", lambda _e: self.close())
@@ -930,10 +920,7 @@ class DoorWindow:
         e = st["enrolling"]
         if e:
             self.enr_title.config(text=f"Enrolling {e['name']} ({e['number']})")
-            if e["review"]:
-                self.enr_hint.config(text=e["hint"] + "   ·   Skip = reject")
-            else:
-                self.enr_hint.config(text=f"{e['hint'] or 'Look at the camera'}   ·   {e['seconds_left']} s left")
+            self.enr_hint.config(text=f"{e['hint'] or 'Look at the camera'}   ·   {e['seconds_left']} s left")
             self.enr_bar.config(value=e["samples"])
             self.skip_btn.config(state="normal")
         else:
@@ -1133,9 +1120,6 @@ class DoorWindow:
         r = st["result"]
         if r:
             self.banner.config(text=r[1], bg={"granted": OK_BG, "already": WARN_BG}.get(r[0], BAD_BG), fg="white")
-        elif st["enrolling"] and st["enrolling"]["review"]:
-            self.banner.config(text=f"POSSIBLE DUPLICATE  {st['enrolling']['name']}\ncompare the faces in the pop-up window",
-                               bg=BAD_BG, fg="white")
         elif st["enrolling"]:
             self.banner.config(text=f"Enrolling {st['enrolling']['name']}", bg=WARN_BG, fg="white")
         elif not st["recognising"]:
@@ -1146,13 +1130,14 @@ class DoorWindow:
             self.banner.config(text="Scanning · look at the camera" if st["arduino"] else "Ready · look at the camera", bg=IDLE_BG, fg=INK)
 
     def _refresh_duplicate(self, st):
-        """Open the comparison window when the door engine pauses on a possible duplicate; close it after."""
-        review = st["enrolling"]["review"] if st["enrolling"] else None
-        if self.dup_win is not None and (review is None or review["id"] != self.dup_win.review_id or self.dup_win.win is None):
+        """Show each rejected duplicate once in the comparison window (it stays until closed)."""
+        dup = st["last_duplicate"]
+        if dup is None or dup["id"] == self._dup_shown:
+            return
+        self._dup_shown = dup["id"]
+        if self.dup_win is not None:
             self.dup_win.close()
-            self.dup_win = None
-        if review is not None and self.dup_win is None and self.door.review_answer is None:
-            self.dup_win = DuplicateWindow(self.root, review, self.door.resolve_review)
+        self.dup_win = DuplicateWindow(self.root, dup)
 
     def tick(self):
         st = self.door.state()
@@ -1175,8 +1160,20 @@ class DoorWindow:
         self.root.destroy()
 
 
+def warn_duplicate_faces(store):
+    """One face, one student: list stored faces that belong to two students (e.g. enrolled before this rule).
+    The door refuses such a face until one of the two students is re-enrolled or deleted."""
+    pairs = store.duplicate_pairs()
+    for a, b, sim in pairs:
+        pa, pb = store.people[a], store.people[b]
+        log(f"DUPLICATE FACE STORED: {pa['studentNumber']} {pa['name']} ~ {pb['studentNumber']} {pb['name']} "
+            f"(similarity {sim:.2f}): the door refuses this face; re-enrol or delete the wrong student")
+    return pairs
+
+
 def run_gui(args):
     store = FaceStore(DATA)
+    warn_duplicate_faces(store)
     client = SrsClient(args.url, args.device_id, args.key)
     backend = Backend(client, store)
     link = ArduinoLink(log=log)       # the Arduino door unit; the program works without it
@@ -1213,11 +1210,8 @@ def check(args):
     log(f"roster: {len(client.roster())} student(s) enrolled on this device")
     store = FaceStore(DATA)
     log(f"faces stored on this PC: {len(store.people)}")
-    pairs = store.duplicate_pairs()
-    for (a, b, sim) in pairs:
-        pa, pb = store.people[a], store.people[b]
-        log(f"  POSSIBLE DUPLICATE: {pa['studentNumber']} {pa['name']}  ~  {pb['studentNumber']} {pb['name']}  (similarity {sim:.2f})")
-    log(f"duplicate faces among them: {len(pairs) or 'none'}")
+    pairs = warn_duplicate_faces(store)
+    log(f"faces stored for two students: {len(pairs) or 'none'}")
     FaceEngine()
     log("face models load OK.")
     cams = list_cameras()

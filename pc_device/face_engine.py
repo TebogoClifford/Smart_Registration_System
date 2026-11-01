@@ -27,9 +27,13 @@ RECOGNIZER_MODEL = MODELS / "face_recognition_sface_2021dec.onnx"
 
 # SFace's published cosine threshold is 0.363; a little higher = fewer false accepts at an exam door.
 MATCH_THRESHOLD = 0.40
-# A new enrolment this similar to someone already stored is held for a person to compare the photos.
-# Same value as the door: any face the door could mix up with another student must be looked at.
+# One face belongs to one student only. A new enrolment this similar to a face already stored for another
+# student is refused. Same value as the door: any face the door could mix up with another student counts.
 DUPLICATE_THRESHOLD = MATCH_THRESHOLD
+
+
+class DuplicateFaceError(ValueError):
+    """Raised by FaceStore.add when the face is already stored for another student."""
 
 
 class FaceEngine:
@@ -108,6 +112,7 @@ class FaceStore:
         self.photos.mkdir(parents=True, exist_ok=True)
         self.embeddings.mkdir(parents=True, exist_ok=True)
         self.people = {}  # studentId -> {"studentNumber", "name", "embedding"}
+        self.last_ambiguous = None  # set by best_match when a face matches two students
         self._migrate_old(data / "faces")
         self._load()
 
@@ -170,8 +175,19 @@ class FaceStore:
         return sorted((p for p in pairs if p[2] >= threshold), key=lambda p: -p[2])
 
     def add(self, student_id, student_number, name, embeddings, photo_jpg=None, duplicate_check=None):
-        """Save a new enrolment: the averaged embedding (JSON) and, if given, the photo (JPEG bytes)."""
+        """Save a new enrolment: the averaged embedding (JSON) and, if given, the photo (JPEG bytes).
+        Refuses (DuplicateFaceError) a face that is already stored for another student, and a student
+        number whose file belongs to another student, so one embedding is only ever linked to one student."""
         mean = average_embedding(embeddings)
+        matches, _ = self.find_duplicates(mean, exclude_id=student_id)
+        if matches:
+            sid, sim = matches[0]
+            other = self.people[sid]
+            raise DuplicateFaceError(f"face already enrolled for {other['studentNumber']} {other['name']} (similarity {sim:.2f})")
+        owner = next((sid for sid, p in self.people.items()
+                      if p["studentNumber"] == str(student_number) and sid != int(student_id)), None)
+        if owner is not None:
+            raise ValueError(f"student number {student_number} is already stored for another student (id {owner})")
         # the same student enrolled again under a changed number: drop the old files first
         old = self.people.get(int(student_id))
         if old and old["studentNumber"] != str(student_number):
@@ -195,12 +211,15 @@ class FaceStore:
         return len(gone)
 
     def best_match(self, embedding, allowed_ids=None):
-        """(studentId, similarity) of the closest enrolled face, or (None, best similarity) below the threshold."""
-        best_id, best = None, -1.0
-        for sid, p in self.people.items():
-            if allowed_ids is not None and sid not in allowed_ids:
-                continue
-            sim = float(np.dot(embedding, p["embedding"]))
-            if sim > best:
-                best_id, best = sid, sim
-        return (best_id, best) if best >= MATCH_THRESHOLD else (None, best)
+        """(studentId, similarity) of the closest enrolled face, or (None, best similarity) below the threshold.
+        A face that also matches a SECOND student is ambiguous: (None, best), and self.last_ambiguous holds
+        the two student ids, so one face is never accepted as either of two people."""
+        scores = sorted(((float(np.dot(embedding, p["embedding"])), sid) for sid, p in self.people.items()
+                         if allowed_ids is None or sid in allowed_ids), reverse=True)
+        self.last_ambiguous = None
+        if not scores or scores[0][0] < MATCH_THRESHOLD:
+            return None, (scores[0][0] if scores else -1.0)
+        if len(scores) > 1 and scores[1][0] >= MATCH_THRESHOLD:
+            self.last_ambiguous = (scores[0][1], scores[1][1])
+            return None, scores[0][0]
+        return scores[0][1], scores[0][0]
