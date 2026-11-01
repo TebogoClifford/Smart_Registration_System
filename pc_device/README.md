@@ -17,12 +17,18 @@
 Face embeddings (the 128 numbers that describe a face) stay on this PC in `data/embeddings/`, the enrolment photos in `data/photos/`. The backend only stores the result and one photo for re-enrolment.
 
 ## Set up (once)
-Needs Python 3.9 or newer with Tkinter (included in the Windows installer from python.org; on Linux install `python3-tk`).
-Everything else is installed by the program itself:
+**On Windows, double-click `start_door.bat`.** It needs nothing installed:
+1. it looks for Python 3.9 or newer (the `python` Microsoft Store shortcut, which only says *"Python was not found"*, does not count);
+2. if there is none it downloads Python 3.12 from python.org and installs it for this user, with Tkinter and pip
+   (no administrator rights needed; `winget` is tried if the download fails);
+3. it starts `srs_pc_app.py`, which installs everything else (below).
+
+Options are passed on, e.g. `start_door.bat --check`. Elsewhere (or with Python already installed):
 ```
 cd pc_device
 python srs_pc_app.py
 ```
+On Linux, Tkinter (the window) comes from `sudo apt install python3-tk`.
 At every start `check_dependencies.py` checks the packages in `requirements.txt` and the two OpenCV Zoo face models
 (~39 MB, checksum-verified). Whatever is missing is installed (`pip install`) or downloaded (`download_models.py`), and
 the program carries on in the same run, no restart needed. When everything is there this takes well under a second.
@@ -77,6 +83,7 @@ when it cannot connect it says why in plain words. The same lines are at the top
 
 | The message says | Fix |
 |---|---|
+| `Python was not found; run without arguments to install from the Microsoft Store` | Python is not installed: double-click `start_door.bat` (or `start_door.bat --check` in the terminal), it installs Python |
 | `device key not accepted for device #N` | `device_id` **and** `device_key` must both come from the same device on the web console (Venues & Devices → the device → Reveal). A copied folder or a new `.exe` gets a fresh `config.ini` with `device_id = 1` |
 | `NOTE: the environment variable BASE_URL=... is used instead of config.ini` | A setting left over from the demo instructions. Remove it (Windows: Settings → *Edit environment variables for your account*), then open a new terminal |
 | `nothing answers at that address` | `url` in `config.ini` is wrong; `http://localhost:3000` only works while the backend runs on this PC |
@@ -146,5 +153,6 @@ Serial messages (9600 baud, one per line) are listed at the top of `srs_door.ino
 | `cameras.py` | Finding and opening webcams (used by the door program and `webcam_test.py`) |
 | `download_models.py` | Downloads the two face models into `models/` (called by `check_dependencies.py`) |
 | `webcam_test.py` | Shows one webcam on its own, to check it works |
+| `start_door.bat` | Windows: double-click to start; installs Python first when the PC has none |
 | `arduino/srs_door/srs_door.ino` | The Arduino door unit's program |
 | `config.example.ini` | Template for `config.ini` (created at the first start; holds the device key, not in git) |
