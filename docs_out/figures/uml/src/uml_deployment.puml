@@ -1,0 +1,39 @@
+@startuml
+!pragma layout smetana
+!include style.iuml
+node "Door PC\n<<device>> Windows" as PCN {
+  node "<<executionEnvironment>>\nPython 3 + OpenCV" as PY {
+    artifact "srs_pc_app.py" as A1
+    artifact "face_engine.py\nYuNet + SFace models" as A2
+    artifact "data/embeddings\ndata/event_queue.json" as A3
+  }
+}
+node "USB webcam\n<<device>>" as CAM
+node "Arduino Mega 2560\n<<device>>" as ARD {
+  artifact "srs_door.ino v2" as A4
+}
+node "HC-SR04 + 16x2 LCD + buzzer\n<<device>>" as IO
+node "Staff computer\n<<device>>" as BR {
+  node "Web browser" as WB
+}
+cloud "Vercel" as VC {
+  artifact "SRS Console\n(React build)" as A5
+}
+cloud "Render" as RD {
+  node "<<executionEnvironment>>\nNode.js 22" as NODE {
+    artifact "Backend REST API\nExpress 5 + Prisma 7" as A6
+  }
+}
+cloud "Neon" as NE {
+  database "PostgreSQL" as PG
+}
+cloud "Brevo" as BV
+CAM -- PCN : USB video
+ARD -- PCN : USB serial\n9600 baud
+IO -- ARD : GPIO D8-D10,\nI2C
+PCN -- RD : HTTPS/JSON\nX-Device-Key
+WB -- VC : HTTPS
+WB -- RD : HTTPS/JSON\nJWT
+RD -- NE : PostgreSQL\nover TLS
+RD -- BV : HTTPS API
+@enduml

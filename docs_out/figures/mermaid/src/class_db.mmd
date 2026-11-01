@@ -1,0 +1,116 @@
+---
+config:
+  layout: elk
+  elk:
+    mergeEdges: false
+    nodePlacementStrategy: BRANDES_KOEPF
+  class:
+    hideEmptyMembersBox: true
+---
+classDiagram
+    direction TB
+    class Venue {
+        <<table venues>>
+        «PK» id : Int
+        name : VarChar[100]
+        capacity : Int = 0
+        created_at : Timestamp
+    }
+    class Device {
+        <<table devices>>
+        «PK» id : Int
+        «FK» venue_id : Int
+        name : VarChar[100]
+        api_key : VarChar[64]
+        status : VarChar[20] = inactive
+        last_seen : Timestamptz [0..1]
+    }
+    class Student {
+        <<table students>>
+        «PK» id : Int
+        student_number : VarChar[20]
+        name : VarChar[100]
+        email : VarChar[255] [0..1]
+        course_name : VarChar[100] [0..1]
+        «FK» device_id : Int [0..1]
+        enrollment_status : VarChar[20] = pending
+        enrollment_image : Bytes [0..1]
+    }
+    class AccessEvent {
+        <<table access_events>>
+        «PK» id : Int
+        «FK» device_id : Int
+        «FK» student_id : Int [0..1]
+        decision : VarChar[10]
+        event_time : Timestamp
+        client_event_id : VarChar[64] [0..1]
+    }
+    class EventOverride {
+        <<table event_overrides>>
+        «PK» id : Int
+        «FK» event_id : Int
+        invigilator_id : VarChar[255]
+        reason : Text
+    }
+    class Module {
+        <<table modules>>
+        «PK» id : Int
+        code : VarChar[20] UNIQUE
+        name : VarChar[100]
+    }
+    class StudentModule {
+        <<table student_modules>>
+        «PK,FK» student_id : Int
+        «PK,FK» module_id : Int
+    }
+    class ExamBooking {
+        <<table exam_bookings>>
+        «PK» id : Int
+        «FK» module_id : Int
+        «FK» venue_id : Int
+        exam_date : Date
+        slot : Char[5]
+        booked_by : VarChar[255] [0..1]
+    }
+    class SeatReservation {
+        <<table seat_reservations>>
+        «PK,FK» booking_id : Int
+        «PK,FK» student_id : Int
+        venue_id : Int
+        exam_date : Date
+        slot : Char[5]
+        seat_number : Int
+    }
+    class EmailOutbox {
+        <<table email_outbox>>
+        «PK» id : Int
+        «FK» student_id : Int [0..1]
+        kind : VarChar[20]
+        to_email : VarChar[255]
+        subject : VarChar[255]
+        status : VarChar[20] = queued
+    }
+    Venue "1" -- "0..*" Device : hosts
+    Device "0..1" -- "0..*" Student : enrols
+    Device "1" -- "0..*" AccessEvent : reports
+    Student "0..1" -- "0..*" AccessEvent : recognised in
+    AccessEvent "1" *-- "0..*" EventOverride : overridden by
+    Student "1" *-- "0..*" StudentModule
+    Module "1" *-- "0..*" StudentModule
+    Module "1" *-- "0..*" ExamBooking : examined in
+    ExamBooking "0..*" -- "1" Venue : held in
+    ExamBooking "1" *-- "0..*" SeatReservation : seats
+    Student "1" *-- "0..*" SeatReservation : sits
+    Student "0..1" -- "0..*" EmailOutbox : receives
+    note for SeatReservation "UNIQUE (student_id, exam_date, slot)<br/>UNIQUE (venue_id, exam_date, slot, seat_number)"
+    note for AccessEvent "decision in granted, denied, error, already, ended, signed_out<br/>UNIQUE (device_id, client_event_id)"
+    class User {
+        <<table users>>
+        «PK» id : Int
+        email : VarChar[255] UNIQUE
+        name : VarChar[100]
+        password_hash : Text
+        role : VarChar[20] = invigilator
+        active : Boolean = true
+        must_change_password : Boolean
+    }

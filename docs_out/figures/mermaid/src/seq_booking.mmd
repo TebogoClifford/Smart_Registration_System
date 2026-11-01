@@ -1,0 +1,37 @@
+sequenceDiagram
+    autonumber
+    actor St as Staff
+    participant UI as SRS Console
+    participant API as Backend API
+    participant DB as PostgreSQL
+    participant BV as Brevo
+    St->>UI: choose module, venue, date, slot
+    UI->>API: POST /api/bookings
+    activate API
+    API->>DB: BEGIN, read module, venue capacity, registered students
+    API->>DB: lock venue/date/slot
+    alt capacity < 1, no students, already booked, hall full or a clash
+        API->>DB: ROLLBACK
+        API-->>UI: 409 + reason
+        UI-->>St: error message
+    else ok
+        critical database transaction (continued)
+            API->>DB: INSERT exam_bookings
+            API->>DB: INSERT seat_reservations (seat numbers)
+            API->>DB: COMMIT
+        end
+        API->>DB: INSERT email_outbox (one per student)
+        API-->>UI: 201 booking + students not enrolled at this venue
+        UI-->>St: booking shown in table and calendar
+        API-)BV: send queued e-mails (background)
+        BV-->>API: message id
+        API->>DB: UPDATE email_outbox SET status = sent
+    end
+    deactivate API
+    Note over St,BV: Exam day: timer every 60 s
+    loop every minute
+        API->>DB: sessions that ended (12:00 / 16:00)?
+        opt a session has ended
+            API->>DB: INSERT access_events (decision = signed_out) for everyone let in during it
+        end
+    end
