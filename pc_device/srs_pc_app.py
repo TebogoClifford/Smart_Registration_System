@@ -1185,6 +1185,7 @@ def run_gui(args):
     backend.start()   # waits out a sleeping Render server by itself (shows OFFLINE until it answers)
     door.start()
     DoorWindow(args, door, backend, link).run()
+    link.disconnect()   # says goodbye: the Arduino's LCD shows NOT CONNECTED
     door.join(timeout=3)
     log(f"stopped ({len(backend.events)} event(s) still queued; they upload next time)")
 

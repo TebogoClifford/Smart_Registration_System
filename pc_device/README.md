@@ -40,11 +40,15 @@ Options (or in `config.ini`): `--url`, `--device-id`, `--key`, `--camera 0` (def
 
 ## Arduino door unit (optional): distance sensor, LCD and buzzer
 
-`arduino/srs_door/srs_door.ino` (version 2) runs on an Arduino Mega, Uno or Nano. The student must stand 25–50 cm
+`arduino/srs_door/srs_door.ino` (version 3) runs on an Arduino Mega, Uno or Nano. The student must stand 25–50 cm
 from the sensor and hold still for **1 second**; only then does the Arduino beep and tell this
 program to take the picture. The answer appears on the LCD with a beep: ACCESS GRANTED (two rising tones),
 ACCESS DENIED (one long low tone, also used for SESSION ENDED and NOT RECOGNISED) or ALREADY INSIDE.
 The student must step away before the next scan.
+
+While this program is connected it sends the Arduino a heartbeat every second. When the heartbeat
+stops (the program is closed, crashes, or you press **Disconnect**) the LCD shows
+**NOT CONNECTED / Start the PC app** within 3 seconds, and no scan starts until it is connected again.
 
 | Part | Pin |
 |---|---|
@@ -68,7 +72,7 @@ panel shows the camera's frames per second and the size of the face in view.
 
 **Test hardware** (any time) opens a window that checks, one by one, and marks each ✔ or ✖ with
 what to check when it fails:
-1. Arduino connected over USB · 2. door unit program answers (version 2) ·
+1. Arduino connected over USB · 2. door unit program answers (version 3) ·
 3. LCD found on the I2C bus · 4. LCD shows the test screen (you answer Yes/No) ·
 5. buzzer beeps (you answer; if not, it tries the other buzzer type) · 6. distance sensor gives readings · 7. it sees your hand at 25–50 cm.
 

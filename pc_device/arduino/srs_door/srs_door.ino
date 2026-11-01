@@ -1,10 +1,14 @@
 /*
-  srs_door.ino - Smart Registration System door unit (Arduino Mega / Uno / Nano), version 2.
+  srs_door.ino - Smart Registration System door unit (Arduino Mega / Uno / Nano), version 3.
 
   An HC-SR04 ultrasonic sensor checks that the student stands at the right distance from the
   webcam. Only after they have stayed inside the distance window for HOLD_MS (1 second) does the
   Arduino tell the PC app to take the picture. The PC app answers with the access decision, which
   is shown on a 16x2 I2C LCD with a beep pattern on the buzzer.
+
+  The PC app sends a heartbeat (H) every second. When nothing has come from the PC for
+  PC_TIMEOUT_MS (3 seconds), or the app said goodbye (X), the LCD shows "NOT CONNECTED" and no
+  scan starts, because nobody would answer it.
 
   Wiring
     HC-SR04  VCC -> 5V   GND -> GND   TRIG -> D9   ECHO -> D10
@@ -17,15 +21,17 @@
   screw on its back.
 
   Serial protocol with the PC app (9600 baud, one message per line)
-    Arduino -> PC   HELLO SRS-DOOR v2 LCD=0x27 BUZ=P   at start-up (LCD=NONE when no LCD answers;
+    Arduino -> PC   HELLO SRS-DOOR v3 LCD=0x27 BUZ=P   at start-up (LCD=NONE when no LCD answers;
                                      BUZ=P passive buzzer, BUZ=A active buzzer)
                     S <cm> <state>   4 times a second: distance (-1 = nothing) and what the unit is doing
                     READY            student held the right distance for 1 s: take the picture now
                     AWAY             student left before a decision arrived: cancel
-                    PONG v2          answer to P
+                    PONG v3          answer to P
                     T ...            hardware test results (see below)
     PC -> Arduino   G / D / A        access granted / denied / already inside
                     P                are you there?
+                    H                heartbeat: the PC app is running (every second, no answer)
+                    X                the PC app is closing: show NOT CONNECTED straight away
                     TL               test the LCD: look for it on the I2C bus, show a test pattern
                                        -> T LCD OK 0x27   or   T LCD FAIL
                     TB               test the buzzer: three beeps  -> T BUZZER DONE
@@ -56,6 +62,7 @@ const unsigned long RESULT_MS = 3000;  // how long a result stays on the screen
 const unsigned long MEASURE_MS = 60;   // HC-SR04 needs ~60 ms between pings
 const unsigned long STATUS_MS = 250;   // how often the live status goes to the PC
 const unsigned long TEST_MAX_MS = 120000; // a test the PC abandoned ends by itself
+const unsigned long PC_TIMEOUT_MS = 3000; // no message from the PC for this long: not connected
 
 LiquidCrystal_I2C *lcd = nullptr;  // created once the LCD is found
 uint8_t lcdAddress = 0;
@@ -70,6 +77,8 @@ unsigned long lastStatus = 0;
 int distanceCm = -1;              // latest reading, -1 = nothing in range
 String line1, line2;              // what is on the LCD now (rewritten only when it changes)
 String incoming;
+unsigned long lastPcMessage = 0;  // when the last line came from the PC app
+bool pcSeen = false;              // false until the PC app speaks, and again after it says X
 
 // ------------------------------------------------------------------ helpers
 // The LCD's I2C address, or 0 when none of the usual addresses answers.
@@ -121,6 +130,9 @@ int measureMedianCm() {
 
 bool inWindow(int cm) { return cm >= MIN_CM && cm <= MAX_CM; }
 
+// True while the PC app is talking to us (its heartbeat arrives every second).
+bool pcConnected() { return pcSeen && millis() - lastPcMessage < PC_TIMEOUT_MS; }
+
 void show(const String &top, const String &bottom) {
   if (!lcd || (top == line1 && bottom == line2)) return;  // no LCD, or avoid flicker
   line1 = top; line2 = bottom;
@@ -159,7 +171,11 @@ String readCommand() {
       String line = incoming;
       incoming = "";
       line.trim();
-      if (line.length()) return line;
+      if (line.length()) {
+        lastPcMessage = millis();  // any line, heartbeat or command, shows the PC app is there
+        pcSeen = true;
+        return line;
+      }
     } else if (incoming.length() < 16) {
       incoming += c;
     }
@@ -227,7 +243,7 @@ void setup() {
   show("Smart Register", "Starting...");
   beep(1800, 60);
   delay(800);
-  Serial.println(String("HELLO SRS-DOOR v2 LCD=") + (lcdAddress ? hex2(lcdAddress) : String("NONE"))
+  Serial.println(String("HELLO SRS-DOOR v3 LCD=") + (lcdAddress ? hex2(lcdAddress) : String("NONE"))
                  + (passiveBuzzer ? " BUZ=P" : " BUZ=A"));
   enter(WAITING);
 }
@@ -236,7 +252,8 @@ void loop() {
   unsigned long now = millis();
   String cmd = readCommand();
   char decision = 0;
-  if (cmd == "P") Serial.println("PONG v2");
+  if (cmd == "P") Serial.println("PONG v3");
+  else if (cmd == "X") pcSeen = false;  // the PC app closed: not connected from now on
   else if (cmd == "BP" || cmd == "BA") setBuzzerType(cmd == "BP");
   else if (cmd.startsWith("T")) handleTestCommand(cmd);
   else if (cmd == "G" || cmd == "D" || cmd == "A") decision = cmd[0];
@@ -252,9 +269,15 @@ void loop() {
     Serial.print("S "); Serial.print(distanceCm); Serial.print(' '); Serial.println(STATE_NAMES[state]);
   }
   bool present = now - lastInWindow <= GRACE_MS;  // in the window, allowing one stray echo
+  bool linked = pcConnected();
+
+  // Without the PC app nobody can answer a scan: drop back to WAITING (a result on screen
+  // finishes first). WAITING then shows NOT CONNECTED until the heartbeat comes back.
+  if (!linked && state != WAITING && state != RESULT) enter(WAITING);
 
   switch (state) {
     case WAITING:
+      if (!linked) { show("NOT CONNECTED", "Start the PC app"); break; }
       if (present) { enter(HOLDING); break; }
       if (distanceCm >= 0 && distanceCm < MIN_CM) show("Too close", "Step back  " + distanceText(distanceCm));
       else if (distanceCm >= 0 && distanceCm <= GONE_CM) show("Come closer", "Stand at " + String(MIN_CM) + "-" + String(MAX_CM) + "cm");
