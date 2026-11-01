@@ -8,8 +8,9 @@ import ChangePasswordForm from '@/components/ChangePasswordForm';
 import { api } from '@/lib/api';
 import { useDraft, hasDraft } from '@/lib/drafts';
 import { useAuth } from '@/lib/auth';
+import { examTime } from '@/lib/exams';
 
-const when = (t) => (t ? new Date(t).toLocaleString() : '—');
+const when = (t) => (t ? examTime(t) : '—');
 
 // My account: anyone signed in can see their details, change their name and phone, and their password.
 // Email, role and staff number are set by an administrator on the Accounts page.

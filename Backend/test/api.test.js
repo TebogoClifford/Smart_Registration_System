@@ -142,6 +142,11 @@ test('event: list is newest first', async () => {
   assert.strictEqual(r.status, 200);
   const t = r.json.map((e) => +new Date(e.timestamp));
   assert.deepStrictEqual(t, [...t].sort((a, b) => b - a));
+  // names come with each event, so the dashboard never shows bare database ids
+  const mine = r.json.find((e) => e.studentId === ctx.student.id);
+  assert.strictEqual(mine.studentNumber, ctx.student.student_number);
+  assert.strictEqual(mine.studentName, ctx.student.name);
+  assert.strictEqual(mine.deviceName, ctx.device.name);
 });
 test('event: list supports from/to filter (dashboard date picker)', async () => {
   let r = await call('GET', '/api/access-events?from=2000-01-01T00:00:00Z&to=2000-01-02T00:00:00Z');

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ScanFace, UserRound, Armchair, MonitorSmartphone } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { api } from '@/lib/api';
+import { examTime } from '@/lib/exams';
 
 const POLL_MS = 3000;
 const FRESH_SECONDS = 60; // a recognition this recent is highlighted as "just now"
@@ -10,7 +11,7 @@ const ago = (ts, now) => {
   const s = Math.max(0, Math.round((now - new Date(ts).getTime()) / 1000));
   if (s < 60) return `${s}s ago`;
   if (s < 3600) return `${Math.floor(s / 60)} min ago`;
-  return new Date(ts).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  return examTime(ts);
 };
 
 function SeatLine({ r }) {
@@ -118,7 +119,7 @@ export default function RecognisedNow() {
   );
 }
 
-const clock = (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const clock = (t) => examTime(t, { hour: '2-digit', minute: '2-digit' });
 
 // Where the student stands now: inside until their session ends, then signed out automatically;
 // 'Session ended' when they were recognised after it was over.

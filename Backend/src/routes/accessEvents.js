@@ -148,13 +148,18 @@ router.get('/', async (req, res) => {
   try {
     const events = await prisma.access_events.findMany({
       where: { event_time: { ...(from && { gte: new Date(from) }), ...(to && { lt: new Date(to) }) } },
-      select: { id: true, device_id: true, student_id: true, decision: true, event_time: true, _count: { select: { event_overrides: true } } },
+      select: {
+        id: true, device_id: true, student_id: true, decision: true, event_time: true, _count: { select: { event_overrides: true } },
+        devices: { select: { name: true } },                         // names for the dashboard table and CSV,
+        students: { select: { student_number: true, name: true } },  // so it never shows bare database ids
+      },
       orderBy: [{ event_time: 'desc' }, { id: 'desc' }],
       take: limit,
     });
     res.json(events.map((e) => ({
       id: e.id, deviceId: e.device_id, studentId: e.student_id, decision: e.decision, timestamp: e.event_time,
       overridden: e._count.event_overrides > 0,
+      deviceName: e.devices?.name ?? null, studentNumber: e.students?.student_number ?? null, studentName: e.students?.name ?? null,
     })));
   } catch (err) {
     handleDbError(res, err);

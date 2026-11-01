@@ -14,10 +14,13 @@ import { rememberPage } from '@/lib/drafts';
 const ALL = 'all';
 const STATUSES = [
   { value: ALL, label: 'Any status' }, { value: 'enrolled', label: 'Enrolled' },
-  { value: 'pending', label: 'Pending' }, { value: 'failed', label: 'Failed' },
+  { value: 'pending', label: 'Pending' }, { value: 'expired', label: 'Request expired' }, { value: 'failed', label: 'Failed' },
 ];
 const SORTS = [{ value: 'name', label: 'Name A–Z' }, { value: 'number', label: 'Student number' }];
-const STATUS_TONE = { enrolled: 'default', pending: 'secondary', failed: 'destructive' };
+const STATUS_TONE = { enrolled: 'default', pending: 'secondary', expired: 'outline', failed: 'destructive' };
+// 'expired' = a capture request no device collected in time (the server says so in enrollment_expired)
+const statusOf = (s) => (s.enrollment_expired ? 'expired' : s.enrollment_status);
+const STATUS_TEXT = { expired: 'request expired' };
 
 // One filter dropdown; `items` = [{ value, label }], the first is the "everything" choice.
 function Filter({ label, value, onChange, items }) {
@@ -81,7 +84,7 @@ export default function StudentList() {
       if (!words.every((w) => text.includes(w))) return false;
       if (course === 'none' ? s.course_name : course !== ALL && s.course_name !== course) return false;
       if (moduleId === 'none' ? s.modules?.length : moduleId !== ALL && !s.modules?.some((m) => String(m.id) === moduleId)) return false;
-      if (status !== ALL && s.enrollment_status !== status) return false;
+      if (status !== ALL && statusOf(s) !== status) return false;
       if (deviceId !== ALL && String(s.device_id) !== deviceId) return false;
       return true;
     });
@@ -145,7 +148,7 @@ export default function StudentList() {
                       <TableCell><span className="font-medium">{s.name}</span>{s.email && <span className="block text-xs text-muted-foreground">{s.email}</span>}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">{s.course_name || '—'}</TableCell>
                       <TableCell className="text-xs">{s.modules?.length ? s.modules.map((m) => m.code).join(', ') : '—'}</TableCell>
-                      <TableCell><Badge variant={STATUS_TONE[s.enrollment_status] ?? 'secondary'}>{s.enrollment_status}</Badge></TableCell>
+                      <TableCell><Badge variant={STATUS_TONE[statusOf(s)] ?? 'secondary'}>{STATUS_TEXT[statusOf(s)] ?? statusOf(s)}</Badge></TableCell>
                       <TableCell className="text-right">
                         <Button variant="ghost" size="sm" onClick={() => navigate(`/students/${s.id}`)}>Manage</Button>
                       </TableCell>

@@ -5,15 +5,15 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { api } from '@/lib/api';
+import { examTime } from '@/lib/exams';
 
-const REQUEST_TTL_MS = 10 * 60 * 1000; // the server ignores capture requests older than this (ENROLL_REQUEST_TTL_SECONDS)
 const POLL_MS = 3000;
 const TONE = { enrolled: 'default', pending: 'secondary', failed: 'destructive' };
 const LABEL = { enrolled: 'Enrolled', pending: 'Pending', failed: 'Failed' };
 
 // True while a capture request is waiting for the device to answer.
-const isWaiting = (student, now = Date.now()) => student.enrollment_status === 'pending'
-  && !!student.enrollment_requested_at && now - new Date(student.enrollment_requested_at).getTime() < REQUEST_TTL_MS;
+// The server says when a request has expired (enrollment_expired, from ENROLL_REQUEST_TTL_SECONDS).
+const isWaiting = (student) => student.enrollment_status === 'pending' && !student.enrollment_expired;
 
 // The student's face enrolment: status, photo, device and an explanation (the Enrol face button
 // sits with the page's other actions, see EnrolFaceButton).
@@ -67,7 +67,7 @@ export default function StudentEnrolment({ student, device }) {
               {online ? <Wifi size={13} className="text-emerald-600" /> : <WifiOff size={13} className="text-rose-600" />}
               {device ? `${device.name} is ${online ? 'online' : 'offline'}` : 'No device assigned'}
             </span>
-            {requestedAt && <span>Last capture request: {requestedAt.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>}
+            {requestedAt && <span>Last capture request: {examTime(requestedAt)}</span>}
           </p>
           {device && !online && <p className="text-xs text-amber-700">Start the {device.name} program first; a request is only picked up within 10 minutes.</p>}
           {status === 'enrolled' && <p className="text-xs text-muted-foreground">Re-enrolling replaces the stored face and photo with a new capture.</p>}

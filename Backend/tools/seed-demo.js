@@ -88,7 +88,7 @@ async function main() {
     students.push({ ...s, dev });
     if (i < 34) await must('enrol', call('PUT', `/api/students/${s.id}/enrollment`, { status: 'enrolled' }, dkey(dev)));
     else if (i === 34) await must('failed', call('PUT', `/api/students/${s.id}/enrollment`, { status: 'failed' }, dkey(dev)));
-    // 35..39 stay "pending" so the Enrollment page has a queue
+    // 35..39 stay "pending" so the Enrolment page has a queue
   }
 
   // 5. module registrations: 2-3 modules each

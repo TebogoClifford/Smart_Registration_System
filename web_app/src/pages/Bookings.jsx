@@ -85,6 +85,37 @@ export default function Bookings() {
     try { const r = await api.cancelBooking(id); toast.success('Booking cancelled, seats freed', { description: emailNote(r?.emails) || undefined }); setExpanded(null); loadAll(); loadAvail(); } catch (err) { toast.error(err.message); }
   };
 
+  // the paper fallback for the door: every seated student with a column to sign in by hand
+  const printSheet = (b, seats) => {
+    const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const rows = seats.map((x) => `<tr><td>${x.seat_number}</td><td>${esc(x.student_number)}</td><td>${esc(x.name)}</td>`
+      + `<td>${x.ready_at_venue ? 'yes' : '<b>NO</b>'}</td><td></td><td></td></tr>`).join('');
+    const ready = seats.filter((x) => x.ready_at_venue).length;
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Sign-in sheet ${esc(b.module_code)} ${esc(b.exam_date)} ${esc(b.slot)}</title>
+<style>body{font:12px Arial,sans-serif;margin:24px}h1{font-size:18px;margin:0 0 4px}p{margin:2px 0}
+table{width:100%;border-collapse:collapse;margin-top:12px}th,td{border:1px solid #444;padding:6px;text-align:left}
+th{background:#eee}td:nth-child(5){width:70px}td:nth-child(6){width:160px}tr{page-break-inside:avoid}</style></head><body>
+<h1>Exam sign-in sheet: ${esc(b.module_code)} ${esc(b.module_name)}</h1>
+<p>${esc(b.exam_date)} · session ${esc(b.slot)} · ${esc(b.venue_name)} · ${seats.length} seated · ${ready} can be recognised at the door</p>
+<p>Students marked NO have no face enrolled for this hall: check their student card and sign them in here.</p>
+<table><thead><tr><th>Seat</th><th>Student number</th><th>Name</th><th>Face at door</th><th>Time in</th><th>Signature</th></tr></thead><tbody>${rows}</tbody></table>
+<p style="margin-top:24px">Invigilator: ______________________ &nbsp; Signature: ______________________</p></body></html>`;
+    const w = window.open('', '_blank');
+    if (!w) { toast.error('Allow pop-ups for this site to print the sheet.'); return; }
+    w.document.write(html);
+    w.document.close();
+    w.focus();
+    w.print();
+  };
+
+  // email every seated student of this exam (again)
+  const emailStudents = async (b) => {
+    try {
+      const r = await api.notifyBooking(b.id);
+      toast.success(`Exam emails recorded for ${b.module_code}`, { description: emailNote(r?.emails) || undefined });
+    } catch (err) { toast.error(err.message); }
+  };
+
   const toggleSeats = async (id) => {
     if (expanded === id) { setExpanded(null); return; }
     try { const d = await api.getBooking(id); setSeatList(d.seatList); setExpanded(id); } catch (err) { toast.error(err.message); }
@@ -177,6 +208,15 @@ export default function Bookings() {
                     {expanded === b.id && (
                       <TableRow>
                         <TableCell colSpan={7} className="bg-muted/30">
+                          <div className="flex flex-wrap items-center gap-2 pt-2 text-sm">
+                            {/* how many of the seated students the door can recognise in this hall */}
+                            <span className={seatList.every((x) => x.ready_at_venue) ? 'text-emerald-700' : 'font-medium text-amber-700'}>
+                              {seatList.filter((x) => x.ready_at_venue).length} of {seatList.length} can be recognised at the door
+                            </span>
+                            <span className="flex-1" />
+                            <Button variant="outline" size="sm" onClick={() => printSheet(b, seatList)}>Print sign-in sheet</Button>
+                            <Button variant="outline" size="sm" onClick={() => emailStudents(b)}>Email students</Button>
+                          </div>
                           <div className="grid gap-x-6 gap-y-1 py-2 text-sm sm:grid-cols-2 lg:grid-cols-3">
                             {seatList.map((s) => (
                               <div key={s.student_id} className="flex gap-2">

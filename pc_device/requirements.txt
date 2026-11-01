@@ -1,4 +1,5 @@
 opencv-python>=4.8
 numpy
 requests
-pyserial          # only needed with --serial (Arduino)
+pyserial          # the Arduino door unit: the Hardware panel's port list and --serial (the program runs without it)
+# Tkinter (the window) comes with Python on Windows; on Linux install it with: sudo apt install python3-tk

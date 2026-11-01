@@ -1,10 +1,11 @@
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import { LayoutDashboard, MapPin, Users, LogOut, ShieldCheck, ChevronRight, CalendarCheck, KeyRound, UserCog } from 'lucide-react';
-import { useEffect } from 'react';
+import { Suspense, useEffect } from 'react';
 import { useAuth } from '@/lib/auth';
 import { rememberPage, lastPage } from '@/lib/drafts';
+import { version } from '../../package.json';
 
-const VERSION = 'v1.2.0-beta';
+const VERSION = `v${version}`;   // one version number: the one in web_app/package.json
 const initialsOf = (name = '') => name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?';
 
 // One sidebar entry per section. A section with `tabs` shows them above its pages;
@@ -66,7 +67,7 @@ export default function Layout() {
   const { user, isAdmin, authRequired, logout } = useAuth();
   const navItems = allNavItems.filter((item) => !item.adminOnly || isAdmin);
   const roleLabel = user?.role === 'admin' ? 'Administrator' : 'Invigilator';
-  const currentPage = navItems.find((item) => isInSection(location.pathname, item)) || navItems[0];
+  const currentPage = allNavItems.find((item) => isInSection(location.pathname, item)) || navItems[0];
 
   // remember the page open in each section and tab (with its ?search), to come back to it later
   const here = location.pathname + location.search;
@@ -151,7 +152,10 @@ export default function Layout() {
             <div className="secure-pill"><ShieldCheck size={15} /> <span>{roleLabel} workspace</span></div>
           </div>
           {currentPage.tabs && <SectionTabs tabs={currentPage.tabs} pathname={location.pathname} />}
-          <Outlet />
+          {/* pages load on first visit (App.jsx); the sidebar stays put meanwhile */}
+          <Suspense fallback={<p className="py-16 text-center text-sm text-muted-foreground">Loading…</p>}>
+            <Outlet />
+          </Suspense>
           <footer className="app-footer">
             <span>Smart Registration System</span>
             <span className="footer-dot" />

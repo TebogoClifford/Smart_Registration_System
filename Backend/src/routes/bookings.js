@@ -157,6 +157,16 @@ router.get('/:id', async (req, res) => {
   } catch (err) { handleDbError(res, err); }
 });
 
+// POST /api/bookings/:id/notify — email every seated student of this exam (again) with their date,
+// session, hall and seat. For exams booked before emails existed, or after fixing email addresses.
+router.post('/:id/notify', async (req, res) => {
+  try {
+    const [row] = await listBookings({ id: Number(req.params.id) });
+    if (!row) return res.status(404).json({ error: 'booking not found' });
+    res.json({ emails: await emailStudents('booked', row) });
+  } catch (err) { handleDbError(res, err); }
+});
+
 // POST /api/bookings  { moduleId, venueId, date, slot }
 router.post('/', async (req, res) => {
   const { moduleId, venueId, date, slot } = req.body ?? {};
