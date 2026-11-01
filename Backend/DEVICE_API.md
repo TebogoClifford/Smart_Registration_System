@@ -40,7 +40,8 @@ Students an invigilator asked this device to capture (not older than 10 min). `[
 Who may enter this device's venue **now**. Without parameters the server uses the current session (before 12:00 → `09:00`, otherwise `13:00`, South African time).
 Sessions end at 12:00 (`09:00` slot) and 16:00 (`13:00` slot): the answer has `endsAt` and `ended`. Everyone let in is signed out
 automatically then (the server records a `signed_out` event). `alreadyInside` lists students let in during this session (empty once
-it has ended); `sessionEndedFor` lists students whose morning exam is over and who have no afternoon seat (12:00 to 13:00).
+it has ended); `sessionEndedFor` lists students whose morning exam is over and who have no afternoon seat (12:00 to 13:00 only:
+from 13:00 the afternoon is a new session and a student signed out at 12:00 may sign in again).
 ```json
 { "venueId": 2, "date": "2026-10-12", "slot": "09:00", "serverTime": "…",
   "students": [ { "studentId": 17, "studentNumber": "220123456", "name": "Thabo M.",
@@ -60,6 +61,8 @@ One decision. Body:
 * `decision`: `granted` | `denied` | `error` (error = capture/match failed) | `already` (let in earlier this session) | `ended`
   (their session is over: not let in). `studentId` may be omitted for an unknown face. The server is the judge: a student is let
   in once per session, so a second `granted` in a session is stored as `already`, and any decision after their session ended as `ended`.
+* `admin` (optional, `true`): the door PC's Admin mode let this student in at any time. A `granted` with `admin: true` is stored as
+  `granted` as sent (never turned into `already` / `ended`), and one after the session ended gets no automatic sign-out.
 * `clientEventId` (max 64 chars): unique per device, e.g. `deviceId-counter`. If an upload is repeated after a WiFi drop the server answers `200` with the original event instead of storing a second one. `201` = created.
 * When the event happened: `timestamp` (ISO 8601, only if the device clock is set) **or** `secondsAgo` (no clock yet) **or** neither (= now).
 

@@ -56,6 +56,26 @@ test('signed in once per session; after the session ends they are denied ("ended
   assert.strictEqual(await recognise(two, '16:30'), 'ended');      // afternoon over
 });
 
+test('signed out at 12:00, a student may sign in again in the afternoon session, seat or not', async () => {
+  const [one] = ctx.s;
+  assert.strictEqual(await recognise(one, '13:30'), 'granted');    // afternoon is a new session
+  assert.strictEqual(await recognise(one, '15:00'), 'already');
+});
+
+test('door Admin mode: let in at any time, stored as sent and never signed out after hours', async () => {
+  const [, two] = ctx.s;
+  const admin = async (hhmm) => {
+    const r = await call('POST', '/api/access-events',
+      { deviceId: ctx.device.id, decision: 'granted', studentId: two.id, timestamp: at(hhmm), admin: true }, dkey());
+    assert.strictEqual(r.status, 201, JSON.stringify(r.json));
+    return r.json.decision;
+  };
+  assert.strictEqual(await admin('14:30'), 'granted');   // already inside: still 'granted'
+  assert.strictEqual(await admin('18:00'), 'granted');   // after the session ended
+  const bad = await call('POST', '/api/access-events', { deviceId: ctx.device.id, decision: 'granted', studentId: two.id, admin: 'yes' }, dkey());
+  assert.strictEqual(bad.status, 400);
+});
+
 test('everyone let in is signed out automatically when their session ends', async () => {
   const ids = ctx.s.map((s) => s.id);
   const list = (await call('GET', `/api/access-events?from=${encodeURIComponent(at('00:00'))}&to=${encodeURIComponent(at('23:59'))}&limit=500`)).json
@@ -63,10 +83,11 @@ test('everyone let in is signed out automatically when their session ends', asyn
     .map((e) => `${e.studentId}@${new Date(e.timestamp).toISOString().slice(11, 16)}`).sort();
   const [one, two] = ids;
   // 12:00 / 16:00 South African time = 10:00 / 14:00 UTC; once per student per session, never twice
-  assert.deepStrictEqual(list, [`${one}@10:00`, `${two}@10:00`, `${two}@14:00`].sort());
+  // (the 18:00 Admin mode entry came after the session ended: no sign-out for it)
+  assert.deepStrictEqual(list, [`${one}@10:00`, `${one}@14:00`, `${two}@10:00`, `${two}@14:00`].sort());
   const again = (await call('GET', `/api/access-events?from=${encodeURIComponent(at('00:00'))}&to=${encodeURIComponent(at('23:59'))}&limit=500`)).json
     .filter((e) => ids.includes(e.studentId) && e.decision === 'signed_out');
-  assert.strictEqual(again.length, 3);
+  assert.strictEqual(again.length, 4);
 });
 
 test('door device: an ended session reports ended and nobody inside', async () => {

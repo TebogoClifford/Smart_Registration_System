@@ -188,9 +188,10 @@ class Backend(threading.Thread):
         tmp.write_text(json.dumps(self.events), encoding="utf-8")
         os.replace(tmp, QUEUE_FILE)
 
-    def record(self, decision, student_id=None):
+    def record(self, decision, student_id=None, admin=False):
+        """admin: let in by Admin mode; the server then keeps it as sent (no 'already' / 'ended')."""
         with self.lock:
-            self.events.append(self.client.make_event(decision, student_id) | {"at": time.time()})
+            self.events.append(self.client.make_event(decision, student_id) | {"at": time.time()} | ({"admin": True} if admin else {}))
             self._save_queue()
 
     def _flush_events(self):
@@ -370,6 +371,7 @@ class DoorEngine(threading.Thread):
         self.photo_requested = False   # the window's Take photo button (enrolment without the size check)
         self.recognising = False       # the window's Start/Stop recognition button
         self.ignore_sensor = bool(args.ignore_sensor)  # the window's "Scan without distance sensor" switch
+        self.admin_mode = False        # the window's Admin mode switch: recognised students in at any time (never saved)
         self.let_in = {}               # (date, slot) -> student ids let in here during that exam session
         self.history = deque(maxlen=50)  # (time, decision, who)
 
@@ -382,6 +384,11 @@ class DoorEngine(threading.Thread):
 
     def request_photo(self):
         self.photo_requested = True
+
+    def set_admin_mode(self, on):
+        self.admin_mode = bool(on)
+        self.streak = (None, 0)
+        log("ADMIN MODE", "ON: recognised students are let in at any time" if on else "off")
 
     def set_ignore_sensor(self, on):
         self.ignore_sensor = bool(on)
@@ -413,7 +420,7 @@ class DoorEngine(threading.Thread):
                              seconds_left=max(0, int(ENROL_TIMEOUT - (time.time() - e["started"]))))
             return dict(frame=self.frame, camera=self.camera_index, cameras=list(self.cameras),
                         arduino=self.link.connected, gate_open=self._gate_open(), recognising=self.recognising,
-                        ignore_sensor=self.ignore_sensor,
+                        ignore_sensor=self.ignore_sensor, admin_mode=self.admin_mode,
                         fps=self.fps, face_px=self.face_px,
                         camera_error=self.camera_error, enrolling=enrol,
                         result=self.result if self.result and time.time() < self.result[2] else None,
@@ -487,9 +494,11 @@ class DoorEngine(threading.Thread):
         person = self.store.people.get(sid) if sid is not None else None
         # a student is let in once per exam session: who is in = let in here + what the server reports
         let_in = self.let_in.setdefault(session_key(session), set())
-        # after the session ends (12:00 / 16:00) everyone is signed out and not let in again
-        ended = sid is not None and (session_over(session) or sid in session.get("sessionEndedFor", []))
-        inside = sid is not None and not ended and (sid in let_in or sid in session.get("alreadyInside", []))
+        # after the session ends (12:00 / 16:00) everyone is signed out and not let in again until the next
+        # session. Admin mode lets a recognised student in at any time, even again in the same session.
+        admin = self.admin_mode and sid is not None
+        ended = sid is not None and not admin and (session_over(session) or sid in session.get("sessionEndedFor", []))
+        inside = sid is not None and not ended and not admin and (sid in let_in or sid in session.get("alreadyInside", []))
         label = ((f"{person['name']} · session ended" if ended else f"{person['name']} · already inside" if inside else person["name"])
                  if person else "not recognised")
         if self.ignore_sensor and sid is None:
@@ -522,19 +531,19 @@ class DoorEngine(threading.Thread):
             decision, text = "already", f"ALREADY INSIDE  {person['name']}\n{person['studentNumber']} · let in earlier this session"
         elif person:
             where = f"seat {seat['seatNumber']} · {seat['moduleCode']}" if seat else "no exam seat in this session"
-            decision, text = "granted", f"RECOGNISED  {person['name']}\n{person['studentNumber']} · {where}"
+            decision, text = "granted", f"{'LET IN (ADMIN)' if admin else 'RECOGNISED'}  {person['name']}\n{person['studentNumber']} · {where}"
             let_in.add(sid)
         else:
             decision, text = "denied", "NOT RECOGNISED\nface is not enrolled"
         if sid is not None:
             self.recent[sid] = now
-        self.backend.record(decision, sid)
+        self.backend.record(decision, sid, admin=admin)
         if self.link.connected:
             self.link.send({"granted": "G", "already": "A"}.get(decision, "D"))
         self.result = (decision, text, now + SHOW_RESULT_SECONDS)
         who = f"{person['studentNumber']} {person['name']}" if person else "unknown face"
         self.history.appendleft((time.strftime("%H:%M:%S"), decision, who))
-        log(decision.upper(), who, f"similarity {sim:.2f}")
+        log(decision.upper() + (" (admin)" if admin else ""), who, f"similarity {sim:.2f}")
         return label
 
     def _switch(self, cam, index):
@@ -742,9 +751,15 @@ class DoorWindow:
         self.ignore_var = tk.BooleanVar(value=door.ignore_sensor)
         tk.Checkbutton(right, text="Scan without distance sensor (recognised faces only)", variable=self.ignore_var,
                        command=self._toggle_ignore_sensor, bg=BG, fg=INK, activebackground=BG, anchor="w",
-                       cursor="hand2").grid(row=3, column=0, sticky="w", pady=(0, 6))
+                       cursor="hand2").grid(row=3, column=0, sticky="w")
+        # Admin mode: recognised students are let in at any time (after the session, again in the same one).
+        # Never saved: the door is back to the normal rules at the next start.
+        self.admin_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(right, text="Admin mode (let recognised students in at any time)", variable=self.admin_var,
+                       command=lambda: self.door.set_admin_mode(self.admin_var.get()), bg=BG, fg=BAD_BG,
+                       activebackground=BG, activeforeground=BAD_BG, anchor="w", cursor="hand2").grid(row=4, column=0, sticky="w", pady=(0, 6))
         camrow = tk.Frame(right, bg=BG)
-        camrow.grid(row=4, column=0, sticky="ew")
+        camrow.grid(row=5, column=0, sticky="ew")
         tk.Label(camrow, text="Camera", bg=BG, fg=INK).pack(side="left")
         self.cam_pick = ttk.Combobox(camrow, state="readonly", width=22)
         self.cam_pick.pack(side="left", padx=8)
@@ -754,7 +769,7 @@ class DoorWindow:
 
         # enrolment, under the camera controls (keeps the window short)
         enr = ttk.LabelFrame(right, text="Enrolment", style="Panel.TLabelframe", padding=10)
-        enr.grid(row=5, column=0, sticky="ew", pady=(10, 0))
+        enr.grid(row=6, column=0, sticky="ew", pady=(10, 0))
         enr.columnconfigure(0, weight=1)
         self.enr_title = ttk.Label(enr, text="Waiting for the web console…", style="P.TLabel",
                                    font=("Segoe UI Semibold", 10), wraplength=VIDEO_W - 30)
@@ -1040,6 +1055,8 @@ class DoorWindow:
             self.banner.config(text=f"Enrolling {st['enrolling']['name']}", bg=WARN_BG, fg="white")
         elif not st["recognising"]:
             self.banner.config(text="Recognition is off\npress Start recognition to scan students", bg=IDLE_BG, fg=MUTED)
+        elif st["admin_mode"]:
+            self.banner.config(text="ADMIN MODE\nrecognised students are let in at any time", bg=WARN_BG, fg="white")
         elif st["ignore_sensor"]:
             self.banner.config(text="Scanning without the distance sensor\nrecognised faces get an answer", bg=IDLE_BG, fg=INK)
         elif st["arduino"] and not st["gate_open"]:

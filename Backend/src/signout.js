@@ -18,6 +18,7 @@ async function signOutEnded(db, now = new Date()) {
     const s = sessionAt(g.event_time);
     const end = sessionEnd(s);
     if (end > now) continue;  // still in the exam
+    if (g.event_time >= end) continue;  // let in after the session ended (door PC Admin mode): nothing to sign out of
     const key = `signout:${s.date}:${s.slot}:${g.student_id}`;
     if (!due.has(key)) {
       due.set(key, { device_id: g.device_id, student_id: g.student_id, decision: 'signed_out', event_time: end, client_event_id: key });

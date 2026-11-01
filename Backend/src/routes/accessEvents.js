@@ -45,8 +45,11 @@ function checkEvent(e) {
     if (!Number.isFinite(s) || s < 0 || s > MAX_AGE_SECONDS) return { error: 'secondsAgo must be between 0 and 2592000' };
     secondsAgo = s;
   }
+  if (e.admin !== undefined && typeof e.admin !== 'boolean') return { error: 'admin must be true or false' };
+  // admin: let in by the door PC's Admin mode, at any time: stored as sent, not turned into 'already' / 'ended'
+  const admin = e.admin === true && e.decision === 'granted';
   const studentId = e.studentId === undefined || e.studentId === null || e.studentId === '' ? null : Number(e.studentId);
-  return { value: { decision: e.decision, studentId, clientEventId, timestamp, secondsAgo } };
+  return { value: { decision: e.decision, studentId, clientEventId, timestamp, secondsAgo, admin } };
 }
 
 // The event fields the API returns.
@@ -59,8 +62,9 @@ async function insertEvent(deviceId, v) {
   const when = v.timestamp ? new Date(v.timestamp) : new Date(Date.now() - (v.secondsAgo ?? 0) * 1000);
   // a student is let in once per exam session; seen again, they are recorded as already inside.
   // After their session has ended (12:00 / 16:00) they are signed out and denied: 'ended'.
+  // (an Admin mode entry from the door PC is let in whatever the session: it is stored as sent)
   let decision = v.decision;
-  if (v.studentId && ['granted', 'denied', 'already'].includes(decision)) {
+  if (v.studentId && !v.admin && ['granted', 'denied', 'already'].includes(decision)) {
     const seat = await seatSession(prisma, v.studentId, when);
     if (seat?.ended) decision = 'ended';
     else if (decision === 'granted' && (await wasLetIn(prisma, v.studentId, when))) decision = 'already';

@@ -25,18 +25,26 @@ function zoneOffsetMinutes(when, tz) {
   return (Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second) - Math.floor(when.getTime() / 1000) * 1000) / 60000;
 }
 
-// The moment a session ({ date, slot }) ends: 12:00 or 16:00 local time on its date.
-function sessionEnd({ date, slot }) {
+// `hhmm` local time on `date`, as a moment.
+function localMoment(date, hhmm) {
   const tz = process.env.EXAM_TIMEZONE || 'Africa/Johannesburg';
-  const asUtc = new Date(`${date}T${SESSION_ENDS[slot]}:00Z`);
+  const asUtc = new Date(`${date}T${hhmm}:00Z`);
   return new Date(asUtc.getTime() - zoneOffsetMinutes(asUtc, tz) * 60000);
 }
 
+// The moment a session ({ date, slot }) starts: 09:00 or 13:00 local time on its date.
+const sessionStart = ({ date, slot }) => localMoment(date, slot);
+
+// The moment a session ({ date, slot }) ends: 12:00 or 16:00 local time on its date.
+const sessionEnd = ({ date, slot }) => localMoment(date, SESSION_ENDS[slot]);
+
 // The session a student with a seat at `when` belongs to and whether it is over: the current session,
-// or (between 12:00 and 13:00) the morning one that has just ended. null when they have no seat.
+// or (between 12:00 and 13:00 only) the morning one that has just ended. From 13:00 the afternoon is a
+// new session, so a student signed out at 12:00 may sign in again. null when they have no seat.
 async function seatSession(db, studentId, when) {
   const now = sessionAt(when);
-  const tries = now.slot === SLOTS[1] ? [now, { date: now.date, slot: SLOTS[0] }] : [now];
+  const inGap = now.slot === SLOTS[1] && when < sessionStart(now);
+  const tries = inGap ? [now, { date: now.date, slot: SLOTS[0] }] : [now];
   for (const s of tries) {
     const seat = await db.seat_reservations.findFirst({ where: { student_id: studentId, exam_date: toDbDate(s.date), slot: s.slot }, select: { seat_number: true } });
     if (seat) return { ...s, ended: when >= sessionEnd(s) };
@@ -156,4 +164,4 @@ async function unenrol(tx, studentId, moduleId) {
 // Seating a whole module is many small queries, so allow longer than Prisma's 5 s default.
 const inTransaction = (prisma, fn) => prisma.$transaction(fn, { maxWait: 10000, timeout: 60000 });
 
-module.exports = { SLOTS, SESSION_ENDS, isValidDate, sessionAt, sessionEnd, seatSession, HttpError, lockSession, availability, assignSeats, failIfProblems, enrol, unenrol, inTransaction };
+module.exports = { SLOTS, SESSION_ENDS, isValidDate, sessionAt, sessionStart, sessionEnd, seatSession, HttpError, lockSession, availability, assignSeats, failIfProblems, enrol, unenrol, inTransaction };
