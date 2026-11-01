@@ -20,7 +20,10 @@ The frontend uses a centralized API client located at `src/lib/api.js`.
 | **Devices** | List Devices | `getDevices` | `GET /api/devices` | Fetch all devices |
 | | Add Device | `createDevice` | `POST /api/devices` | Assign device to venue |
 | **Device Detail** | Edit Name | `updateDevice` | `PUT /api/devices/:id` | Update device metadata |
-| | Delete | `deleteDevice` | `DELETE /api/devices/:id` | Delete (blocked if students exist) |
+| | Delete | `deleteDevice` | `DELETE /api/devices/:id` | Delete (blocked if students or access events exist) |
+| | Replace key (admin) | `regenerateDeviceKey` | `POST /api/devices/:id/regenerate-key` | New secret key; the old one stops working |
+| **Exam bookings** | Seats | `getBooking` | `GET /api/bookings/:id` | Seat list, how many can be recognised at the door, **Print sign-in sheet** (paper fallback, made in the browser) |
+| | Email students | `notifyBooking` | `POST /api/bookings/:id/notify` | Emails every seated student their exam details again |
 | **Students** | List Students | `getStudents` | `GET /api/students` | Fetch all student records |
 | **Student Detail** | Edit Info | `updateStudent` | `PUT /api/students/:id` | Update student details |
 | | Delete | `deleteStudent` | `DELETE /api/students/:id` | Remove student record |

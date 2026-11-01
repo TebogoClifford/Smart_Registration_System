@@ -5,6 +5,7 @@ Plain HTTP(S) with JSON. The backend cannot call the device (it sits behind a ro
 * **Base URL:** your Render address, e.g. `https://smart-registration-system.onrender.com`. Render only serves HTTPS, so the ESP32 must use TLS (`esp_http_client` with the certificate bundle).
 * **Cold start:** the free Render tier sleeps. The first call after a quiet period can take 30–60 s. Use a 60 s timeout, and call `GET /health` at boot until it answers `{"status":"ok"}`.
 * **Identity:** every device call sends `X-Device-Key: <key>`. The id and key are shown (admin only) on the device's page in the web console. Wrong key → `401`, unknown device → `404`. Any successful call also counts as a heartbeat.
+  An administrator can replace a key (device page → **Replace**, or `POST /api/devices/{id}/regenerate-key`); the old key stops working at once.
 * **Errors:** always JSON `{ "error": "message" }`. `4xx` = fix the request, do not retry. `5xx` or no answer = retry later.
 
 ## Startup sequence

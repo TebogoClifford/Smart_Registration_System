@@ -171,3 +171,24 @@ test('input: whitespace-only names are rejected', async () => {
   assert.strictEqual((await call('POST', '/api/devices', { venue_id: ctx.venue.id, name: '   ' })).status, 400);
   assert.strictEqual((await call('POST', '/api/students', { email: 'student@example.com', student_number: ' ', name: 'x', device_id: ctx.dev.id })).status, 400);
 });
+
+test('device: regenerate key - old key stops working, new key works', async () => {
+  const old = ctx.dev2.api_key;
+  const r = await call('POST', `/api/devices/${ctx.dev2.id}/regenerate-key`);
+  assert.strictEqual(r.status, 200);
+  assert.strictEqual(r.json.api_key.length, 64);
+  assert.notStrictEqual(r.json.api_key, old);
+  const cfg = (k) => call('GET', `/api/devices/${ctx.dev2.id}/config`, undefined, { 'X-Device-Key': k });
+  assert.strictEqual((await cfg(old)).status, 401);             // the old key is refused at once
+  assert.strictEqual((await cfg(r.json.api_key)).status, 200);  // the new one works
+  ctx.dev2.api_key = r.json.api_key;
+  assert.strictEqual((await call('POST', '/api/devices/999999/regenerate-key')).status, 404);
+});
+
+test('student: a fresh capture request is not expired; an enrolled student never is', async () => {
+  const fresh = (await call('POST', '/api/students', { email: 'fresh@example.com', student_number: 'XF1', name: 'Fresh', device_id: ctx.dev.id })).json;
+  assert.strictEqual(fresh.enrollment_status, 'pending');
+  assert.strictEqual(fresh.enrollment_expired, false);
+  await call('PUT', `/api/students/${fresh.id}/enrollment`, { status: 'enrolled' }, key());
+  assert.strictEqual((await call('GET', `/api/students/${fresh.id}`)).json.enrollment_expired, false);
+});

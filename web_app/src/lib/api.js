@@ -82,6 +82,11 @@ const api = {
     const response = await http.get(`/api/venues/${venueId}/devices`);
     return response.data;
   },
+  // administrators: give the device a new secret key (the old one stops working at once)
+  async regenerateDeviceKey(id) {
+    const response = await http.post(`/api/devices/${id}/regenerate-key`);
+    return response.data;
+  },
   async getDevice(id) {
     const response = await http.get(`/api/devices/${id}`);
     return response.data;
@@ -163,6 +168,8 @@ const api = {
   async getDateAvailability(params) { return (await http.get('/api/bookings/date-availability', { params })).data; },
   async getAvailability(venueId, date, slot) { return (await http.get('/api/bookings/availability', { params: { venueId, date, slot } })).data; },
   async createBooking(moduleId, venueId, date, slot) { return (await http.post('/api/bookings', { moduleId, venueId, date, slot })).data; },
+  // email every seated student of the exam again (date, session, hall, seat)
+  async notifyBooking(id) { return (await http.post(`/api/bookings/${id}/notify`)).data; },
   async cancelBooking(id) { return (await http.delete(`/api/bookings/${id}`)).data; },
   // move a booking to another hall / day / session; the module's students are seated again
   async updateBooking(id, venueId, date, slot) { return (await http.put(`/api/bookings/${id}`, { venueId, date, slot })).data; },

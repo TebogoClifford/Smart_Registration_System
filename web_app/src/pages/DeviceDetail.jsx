@@ -69,6 +69,18 @@ export default function DeviceDetail() {
     }
   };
 
+  // new secret key: the old one stops working, so the PC's config.ini must get the new one
+  const handleNewKey = async () => {
+    try {
+      const d = await api.regenerateDeviceKey(id);
+      setDevice(d);
+      setShowKey(true);                 // show it straight away so it can be copied
+      toast.success('New key created', { description: 'Copy it into device_key in the PC\'s config.ini, then restart the door program.' });
+    } catch (err) {
+      toast.error(err.message);
+    }
+  };
+
   if (!device) return <div className="p-8 text-center">Loading...</div>;
 
   return (
@@ -121,6 +133,8 @@ export default function DeviceDetail() {
             >
               <Copy size={14} /> Copy
             </Button>
+            {/* replace a key that someone else may have seen */}
+            <ConfirmDeleteDialog label="Replace" title="Replace the device key" itemName="the key of this device (the old key stops working at once)" onConfirm={handleNewKey} />
           </div>}
           {isAdmin && <div className="flex gap-2">
             <Button onClick={handleSave}>Save Changes</Button>
@@ -153,7 +167,7 @@ export default function DeviceDetail() {
                     <TableCell className="font-medium">{s.name}</TableCell>
                     <TableCell>
                       <Badge variant={s.enrollment_status === 'enrolled' ? 'default' : 'secondary'}>
-                        {s.enrollment_status}
+                        {s.enrollment_expired ? 'request expired' : s.enrollment_status}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right">

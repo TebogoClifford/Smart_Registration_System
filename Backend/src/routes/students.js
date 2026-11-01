@@ -10,7 +10,15 @@ const STUDENT_SELECT = {
   id: true, student_number: true, name: true, email: true, device_id: true, enrollment_status: true, enrollment_requested_at: true, course_name: true,
   student_modules: { select: { modules: { select: { id: true, code: true, name: true } } }, orderBy: { modules: { code: 'asc' } } },
 };
-const shape = ({ student_modules: sm, ...s }, withImage) => ({ ...s, has_image: withImage.has(s.id), modules: sm.map((x) => x.modules) });
+// A capture request nobody collected within ENROLL_REQUEST_TTL_SECONDS (default 10 min) is dropped by the
+// device API (see pending-enrollments in routes/devices.js). enrollment_expired tells the web console,
+// so such a student shows "request expired" instead of waiting forever.
+const requestTtlMs = () => (parseInt(process.env.ENROLL_REQUEST_TTL_SECONDS, 10) > 0 ? parseInt(process.env.ENROLL_REQUEST_TTL_SECONDS, 10) : 600) * 1000;
+const isExpired = (s) => s.enrollment_status === 'pending'
+  && (!s.enrollment_requested_at || Date.now() - new Date(s.enrollment_requested_at).getTime() > requestTtlMs());
+const shape = ({ student_modules: sm, ...s }, withImage) => ({
+  ...s, has_image: withImage.has(s.id), modules: sm.map((x) => x.modules), enrollment_expired: isExpired(s),
+});
 // ids (of `ids`, or of everyone) that have an enrolment photo, without loading the photos
 const idsWithImage = async (ids) => new Set((await prisma.students.findMany({
   where: { enrollment_image: { not: null }, ...(ids && { id: { in: ids } }) }, select: { id: true },

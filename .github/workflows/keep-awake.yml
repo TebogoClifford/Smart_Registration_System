@@ -1,0 +1,18 @@
+# keep-awake.yml — Render's free plan puts the backend to sleep after 15 minutes without requests,
+# and waking it takes about 30-60 s (the door shows OFFLINE meanwhile). This pings /health every
+# 10 minutes on weekdays from 06:00 to 17:00 South African time (04:00-14:59 UTC), so it stays awake
+# during exam hours. GitHub may start a scheduled run a few minutes late; that is fine here.
+# Run it by hand before a demo: Actions > Keep backend awake > Run workflow.
+name: Keep backend awake
+
+on:
+  schedule:
+    - cron: '*/10 4-14 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /health (allow 90 s for a cold start)
+        run: curl -sS --max-time 90 --retry 2 https://smart-registration-system.onrender.com/health

@@ -297,6 +297,14 @@ test('exam emails: booking, moving and cancelling each record one email per stud
   assert.strictEqual((await call('GET', '/api/emails?status=nope')).status, 400);
 });
 
+test('exam emails: notify sends the booked email again to every seated student', async () => {
+  const seated = (await call('GET', `/api/bookings/${ctx.bookA.id}`)).json.seatList.length;
+  const r = await call('POST', `/api/bookings/${ctx.bookA.id}/notify`);
+  assert.strictEqual(r.status, 200);
+  assert.strictEqual(r.json.emails.queued, seated);           // one email per seated student
+  assert.strictEqual((await call('POST', '/api/bookings/999999/notify')).status, 404);
+});
+
 test('module with bookings cannot be deleted; cancelling a booking frees seats', async () => {
   assert.strictEqual((await call('DELETE', `/api/modules/${ctx.modB.id}`)).status, 409);
   const cancel = await call('DELETE', `/api/bookings/${ctx.bookB.id}`);

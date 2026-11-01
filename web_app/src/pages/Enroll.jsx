@@ -539,7 +539,7 @@ export default function Enroll() {
                     <TableCell>
                       <Badge variant={s.enrollment_status === 'enrolled' ? 'default' : 'secondary'} className="flex items-center gap-1 w-fit">
                         <span className={`w-1.5 h-1.5 rounded-full ${s.enrollment_status === 'enrolled' ? 'bg-green-600' : 'bg-amber-600'}`} />
-                        {s.enrollment_status}
+                        {s.enrollment_expired ? 'request expired' : s.enrollment_status}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right">

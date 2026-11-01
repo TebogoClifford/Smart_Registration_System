@@ -68,6 +68,23 @@ router.put('/:id', auth.requireAdmin, async (req, res) => {
   }
 });
 
+// POST /api/devices/:id/regenerate-key — give the device a new secret key (administrators only).
+// Use it when the key may have been seen by someone else. The old key stops working at once,
+// so the new one must be copied into the device's settings (config.ini on the PC).
+router.post('/:id/regenerate-key', auth.requireAdmin, async (req, res) => {
+  const api_key = crypto.randomBytes(32).toString('hex');   // 64 hex characters, same as a new device
+  try {
+    const row = await prisma.devices.update({
+      where: { id: Number(req.params.id) }, data: { api_key },
+      select: { id: true, venue_id: true, name: true, api_key: true, last_seen: true },
+    });
+    res.json({ ...row, status: liveStatus(row.last_seen) });
+  } catch (err) {
+    if (isNotFound(err)) return res.status(404).json({ error: 'device not found' });
+    handleDbError(res, err);
+  }
+});
+
 // DELETE /api/devices/:id — blocked if students are enrolled on this device
 router.delete('/:id', auth.requireAdmin, async (req, res) => {
   const { id } = req.params;
@@ -127,6 +144,7 @@ router.get('/:id/config', requireDevice, (req, res) => {
 // Requests older than ENROLL_REQUEST_TTL_SECONDS (default 10 min) are ignored as abandoned.
 router.get('/:id/pending-enrollments', requireDevice, async (req, res) => {
   try {
+    // keep in step with isExpired() in routes/students.js
     const since = new Date(Date.now() - envInt('ENROLL_REQUEST_TTL_SECONDS', 600) * 1000);
     const rows = await prisma.students.findMany({
       where: { device_id: req.device.id, enrollment_status: 'pending', enrollment_requested_at: { gt: since } },

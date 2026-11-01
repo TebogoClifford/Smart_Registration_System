@@ -19,6 +19,7 @@ python download_models.py          # two OpenCV Zoo models, ~39 MB, checksum-ver
 copy config.example.ini config.ini # then fill in device_id and device_key
 ```
 An **administrator** finds the device id and key on the device's page in the web console (Venues & Devices → Manage → Reveal). Invigilators cannot see keys.
+If the key is replaced there (**Replace**), copy the new one into `device_key` in `config.ini` and restart the program; until then it shows OFFLINE with "device key not accepted".
 
 ## Run
 ```
