@@ -1,5 +1,6 @@
-opencv-python>=4.8
-numpy
-requests
-pyserial          # the Arduino door unit: the Hardware panel's port list and --serial (the program runs without it)
-# Tkinter (the window) comes with Python on Windows; on Linux install it with: sudo apt install python3-tk
+# Installed automatically when srs_pc_app.py starts (check_dependencies.py); by hand: pip install -r requirements.txt
+opencv-python>=4.8   # camera, face detection (YuNet) and face recognition (SFace)
+numpy                # face embeddings
+requests             # the connection to the server (without it decisions wait in the offline queue)
+pyserial             # the Arduino door unit (the program runs without it)
+# Tkinter (the window) comes with Python on Windows; on Linux: sudo apt install python3-tk

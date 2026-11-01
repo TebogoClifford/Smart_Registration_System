@@ -16,7 +16,12 @@ Install the one dependency with:   pip install requests
 import itertools
 import time
 
-import requests
+try:
+    import requests
+except ImportError:   # every call then fails with SrsError, so a door program stays OFFLINE instead of crashing
+    requests = None
+
+NO_REQUESTS = "the 'requests' package is not installed (pip install requests)"
 
 
 class SrsError(Exception):
@@ -33,13 +38,16 @@ class SrsClient:
         self.device_id = int(device_id)
         self.timeout = timeout          # long, because the free Render tier wakes up slowly
         self.retries = retries          # extra tries for network errors and 5xx answers
-        self.http = requests.Session()
-        self.http.headers["X-Device-Key"] = device_key
+        self.http = requests.Session() if requests else None
+        if self.http:
+            self.http.headers["X-Device-Key"] = device_key
         self._counter = itertools.count(1)
 
     # ---------- low level ----------
     def _request(self, method, path, **kwargs):
         """Send a request. 4xx = our mistake, raise at once. Network error / 5xx = wait and retry."""
+        if self.http is None:
+            raise SrsError(f"{method} {path}: {NO_REQUESTS}")
         last = None
         for attempt in range(self.retries + 1):
             try:
@@ -62,6 +70,8 @@ class SrsClient:
 
     def wait_until_up(self, max_wait=120):
         """Call GET /health until the backend answers (it may be waking up). Returns True when ready."""
+        if requests is None:
+            raise SrsError(NO_REQUESTS)
         deadline = time.time() + max_wait
         while time.time() < deadline:
             try:

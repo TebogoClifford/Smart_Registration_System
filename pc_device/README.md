@@ -18,19 +18,39 @@ Face embeddings (the 128 numbers that describe a face) stay on this PC in `data/
 
 ## Set up (once)
 Needs Python 3.9 or newer with Tkinter (included in the Windows installer from python.org; on Linux install `python3-tk`).
+Everything else is installed by the program itself:
 ```
 cd pc_device
-pip install -r requirements.txt
-python download_models.py          # two OpenCV Zoo models, ~39 MB, checksum-verified
-copy config.example.ini config.ini # Windows; on macOS/Linux: cp config.example.ini config.ini
+python srs_pc_app.py
 ```
+At every start `check_dependencies.py` checks the packages in `requirements.txt` and the two OpenCV Zoo face models
+(~39 MB, checksum-verified). Whatever is missing is installed (`pip install`) or downloaded (`download_models.py`), and
+the program carries on in the same run, no restart needed. When everything is there this takes well under a second.
+The first start also creates `config.ini` from `config.example.ini`.
 Then fill in `device_id` and `device_key` in `config.ini`. An **administrator** finds them on the device's page in the web console (Venues & Devices → the device → **Reveal**). Invigilators cannot see keys.
 If an administrator replaces the key there (**Replace**), copy the new one into `device_key` and restart the program; until then it shows OFFLINE with "device key not accepted".
+
+To set up or repair a PC without starting the door: `python check_dependencies.py` (`--check` only reports).
+
+### Without a dependency
+The door program **always starts**. Anything that cannot be installed (no internet, no pip, no rights) is listed in
+the console and the Activity log as `NOT READY`, with the command that fixes it, and only its own feature is switched off:
+
+| Missing | What still works | What is off |
+|---|---|---|
+| `requests` | everything on this PC; decisions are queued in `data/event_queue.json` | the server connection (shows OFFLINE) |
+| `pyserial` | everything | the Arduino door unit |
+| face models | the window, server connection, camera picture, Arduino | enrolment and recognition (banner: *Face recognition unavailable*) |
+| `opencv-python` / `numpy` | the window, server connection, seat list, Arduino | the camera, enrolment and recognition |
+| Tkinter | the whole door in the console (recognition starts by itself; Ctrl+C stops it) | the window |
+
+Install it and restart the program to switch the feature back on. Use `--no-install` to skip installing at start-up.
 
 ## Run
 ```
 python srs_pc_app.py --check       # tests URL, key, models, cameras and serial ports, no camera window
 python srs_pc_app.py               # opens the door window
+python srs_pc_app.py --no-install  # the same, but only reports missing dependencies
 ```
 **The window:** on the right, the camera picture with the result banner under it, the **Start recognition** button, the camera picker and the **Enrolment** panel (progress bar and **Skip**). On the left: the **Device** panel (server, device, last contact, faces stored, queued events, camera), the **Hardware** panel for the Arduino door unit, the current **Exam session** with its seat list, and the **Activity** log. Close the window or press **Esc** to stop.
 
@@ -91,3 +111,16 @@ Serial messages (9600 baud, one per line) are listed at the top of `srs_door.ino
   never leave it.
 * At start-up and with `python srs_pc_app.py --check` the program lists any face stored for two students (for example
   enrolled before this rule), so the wrong one can be re-enrolled or deleted.
+
+## Files
+| File | What it does |
+|---|---|
+| `srs_pc_app.py` | The door program: server worker, camera + face worker, window (start this one) |
+| `check_dependencies.py` | Checks and installs the packages and face models at start-up |
+| `face_engine.py` | Face detection (YuNet), embeddings (SFace) and the faces stored on this PC |
+| `arduino_link.py` | The serial connection to the Arduino door unit and the hardware test |
+| `cameras.py` | Finding and opening webcams (used by the door program and `webcam_test.py`) |
+| `download_models.py` | Downloads the two face models into `models/` (called by `check_dependencies.py`) |
+| `webcam_test.py` | Shows one webcam on its own, to check it works |
+| `arduino/srs_door/srs_door.ino` | The Arduino door unit's program |
+| `config.example.ini` | Template for `config.ini` (created at the first start; holds the device key, not in git) |

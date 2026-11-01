@@ -25,47 +25,81 @@ seat list, enrolment progress, activity log) beside it. Pick the camera from the
 video; the choice is saved in config.ini.
 
 Run:
-  pip install -r requirements.txt
-  python download_models.py                       (once)
   python srs_pc_app.py                            (settings from config.ini)
   python srs_pc_app.py --check                    (test the connection only, no camera)
+  python srs_pc_app.py --no-install               (do not install missing dependencies at start-up)
+
+At start-up check_dependencies.py installs whatever is missing (the packages in requirements.txt
+and the two face models). Anything it cannot install only switches its own feature off: without
+OpenCV there is no camera, without requests the decisions wait in the offline queue, without
+pyserial there is no Arduino and without Tkinter the program runs in the console.
 
 Settings can also come from the command line or the environment variables BASE_URL, DEVICE_ID,
 DEVICE_KEY, CAMERA_INDEX, SERIAL_PORT.
 """
-import argparse
-import configparser
-import json
-import os
-import queue
-import re
 import sys
-import threading
-import time
-import tkinter as tk
-from datetime import datetime
-from collections import deque
 from pathlib import Path
-from tkinter import ttk
 
-import cv2
-import numpy as np
+# 1. dependencies first: this installs missing packages, so it must run before they are imported
+from check_dependencies import ensure_dependencies
 
-# hide OpenCV's harmless warnings (empty camera slots while scanning, dnn engine notes)
+SETUP_PROBLEMS = ensure_dependencies(install_missing="--no-install" not in sys.argv[1:])
+
+import argparse  # noqa: E402
+import configparser  # noqa: E402
+import json  # noqa: E402
+import os  # noqa: E402
+import queue  # noqa: E402
+import re  # noqa: E402
+import shutil  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
+from collections import deque  # noqa: E402
+from datetime import datetime  # noqa: E402
+
+# 2. the window (Tkinter): without it the door runs in the console (run_console)
 try:
-    cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
-except AttributeError:
-    pass
+    import tkinter as tk
+    from tkinter import ttk
+except ImportError:
+    tk = ttk = None
+
+# 3. camera and face recognition (OpenCV, NumPy, face_engine): without them the camera is off
+try:
+    import cv2
+    import numpy as np
+    from face_engine import (DUPLICATE_THRESHOLD, DuplicateFaceError, FaceEngine, FaceStore,
+                             average_embedding, embedding_strip)
+    cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)  # hide harmless camera-scan warnings
+    VISION_PROBLEM = ""
+except (ImportError, AttributeError) as _err:
+    cv2 = np = FaceEngine = None
+    DUPLICATE_THRESHOLD = 0.40
+    VISION_PROBLEM = f"camera and face recognition are off: {_err} (pip install -r requirements.txt)"
+
+    class FaceStore:
+        """Stands in for face_engine.FaceStore without NumPy: no faces stored, nothing to clean up."""
+
+        def __init__(self, _data_folder):
+            self.people = {}
+
+        def keep_only(self, _student_ids):
+            return 0
+
+        def duplicate_pairs(self):
+            return []
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "device_client"))
-from srs_client import SrsClient, SrsError  # noqa: E402
-from arduino_link import MAX_CM, MIN_CM, ArduinoLink, available_ports, guess_arduino_port  # noqa: E402
-from face_engine import DUPLICATE_THRESHOLD, DuplicateFaceError, FaceEngine, FaceStore, average_embedding, embedding_strip  # noqa: E402
+from srs_client import SrsClient, SrsError  # noqa: E402  (works without requests: stays OFFLINE)
+from cameras import auto_camera, list_cameras, open_camera  # noqa: E402
+from arduino_link import (MAX_CM, MIN_CM, TEST_STEPS, ArduinoLink, available_ports,  # noqa: E402
+                          guess_arduino_port)
 
 DATA = HERE / "data"
 QUEUE_FILE = DATA / "event_queue.json"
 CONFIG_FILE = HERE / "config.ini"
+CONFIG_EXAMPLE = HERE / "config.example.ini"
 
 ENROL_SAMPLES = 5            # embeddings averaged per enrolment
 ENROL_SAMPLE_GAP = 0.25      # seconds between samples
@@ -91,6 +125,9 @@ def log(*args):
 
 # ---------------------------------------------------------------- settings
 def load_settings():
+    if not CONFIG_FILE.exists() and CONFIG_EXAMPLE.exists():
+        shutil.copyfile(CONFIG_EXAMPLE, CONFIG_FILE)   # first start: a config.ini to fill in
+        print(f"created {CONFIG_FILE.name} from {CONFIG_EXAMPLE.name}: fill in device_id and device_key")
     ini = configparser.ConfigParser()
     ini.read(CONFIG_FILE, encoding="utf-8")
     cfg = ini["srs"] if ini.has_section("srs") else {}
@@ -108,9 +145,12 @@ def load_settings():
     p.add_argument("--min-face", type=int, default=int(pick("min_face_px", "MIN_FACE_PX", "90")),
                    help="ignore faces narrower than this many pixels (= too far from the camera)")
     p.add_argument("--check", action="store_true", help="test the backend connection and exit (no camera)")
+    p.add_argument("--no-install", action="store_true",
+                   help="do not install missing dependencies at start-up (they are still checked)")
     a = p.parse_args()
     if not a.device_id or not a.key:
-        p.error("set --device-id and --key (an administrator copies the key from the device page in the web console)")
+        p.error(f"set device_id and device_key in {CONFIG_FILE} (or --device-id and --key); "
+                "an administrator copies the key from the device page in the web console")
     return a
 
 
@@ -123,10 +163,6 @@ def save_setting(name, value):
     pattern = rf"(?m)^{re.escape(name)}\s*=.*$"
     text = re.sub(pattern, line, text) if re.search(pattern, text) else text.rstrip() + f"\n{line}\n"
     CONFIG_FILE.write_text(text, encoding="utf-8")
-
-
-def save_camera_choice(index):
-    save_setting("camera", index)
 
 
 # ---------------------------------------------------------------- network worker
@@ -271,33 +307,7 @@ class Backend(threading.Thread):
             self.stop.wait(1)
 
 
-# ---------------------------------------------------------------- cameras
-def _open(index):
-    return cv2.VideoCapture(index, cv2.CAP_DSHOW) if os.name == "nt" else cv2.VideoCapture(index)
-
-
-def list_cameras(max_index=6, skip=None):
-    """[(index, width, height)] of the cameras that deliver a frame. `skip` = an index already open."""
-    found = []
-    for i in range(max_index):
-        if i == skip:
-            found.append((i, None, None))
-            continue
-        cam = _open(i)
-        if cam.isOpened():
-            ok, frame = cam.read()
-            if ok and frame is not None:
-                found.append((i, frame.shape[1], frame.shape[0]))
-        cam.release()
-    return found
-
-
-def auto_camera(cameras):
-    """Built-in laptop cameras are normally index 0 and a plugged-in USB webcam comes after it,
-    so 'auto' takes the highest working index."""
-    return cameras[-1][0] if cameras else None
-
-
+# ---------------------------------------------------------------- exam session times
 def session_over(session):
     """True once the exam session has ended (12:00 / 16:00): everyone is signed out then."""
     if session.get("ended"):
@@ -319,7 +329,7 @@ def session_key(session):
     return time.strftime("%Y-%m-%d"), ("09:00" if time.localtime().tm_hour < 12 else "13:00")
 
 
-GREEN, RED, AMBER, WHITE = (60, 200, 60), (40, 40, 230), (0, 190, 255), (255, 255, 255)
+AMBER, WHITE = (0, 190, 255), (255, 255, 255)   # face box colours (BGR): too far away / close enough
 
 
 # ---------------------------------------------------------------- camera + face worker
@@ -333,7 +343,14 @@ class DoorEngine(threading.Thread):
         self.backend = backend
         self.store = store
         self.client = client
-        self.engine = FaceEngine()
+        self.engine, self.problem = None, VISION_PROBLEM   # problem = why faces cannot be handled ("" = fine)
+        if FaceEngine is not None:
+            try:
+                self.engine = FaceEngine()
+            except Exception as err:  # models missing or broken: the camera still shows, faces are off
+                self.problem = f"face recognition is off: {err}"
+        if self.problem:
+            log(self.problem)
         self.link = link               # the Arduino door unit (arduino_link.py); optional
         self.fps = 0.0                 # camera frames per second (live value for the window)
         self.face_px = None            # width of the biggest face in the picture, in pixels
@@ -364,7 +381,6 @@ class DoorEngine(threading.Thread):
     def request_skip(self):
         self.skip_requested = True
 
-
     def toggle_recognition(self):
         self.recognising = not self.recognising
         self.streak = (None, 0)
@@ -393,7 +409,7 @@ class DoorEngine(threading.Thread):
                         camera_error=self.camera_error, enrolling=enrol,
                         result=self.result if self.result and time.time() < self.result[2] else None,
                         faces_stored=len(self.store.people), history=list(self.history),
-                        last_duplicate=self.last_duplicate)
+                        last_duplicate=self.last_duplicate, problem=self.problem)
 
     # -- enrolment
     def _finish_enrolment(self, ok, why=None):
@@ -567,7 +583,7 @@ class DoorEngine(threading.Thread):
     def _switch(self, cam, index):
         if cam is not None:
             cam.release()
-        new = _open(index)
+        new = open_camera(index)
         ok = new.isOpened() and new.read()[0]
         with self.lock:
             if ok:
@@ -582,6 +598,11 @@ class DoorEngine(threading.Thread):
         return None
 
     def run(self):
+        if cv2 is None:   # without OpenCV there is no camera; the rest of the program carries on
+            with self.lock:
+                self.camera_error = self.problem
+            self.stop.wait()
+            return
         cams = self.rescan()
         choice = self.args.camera
         start = auto_camera(cams) if str(choice).lower() == "auto" else int(choice)
@@ -608,7 +629,7 @@ class DoorEngine(threading.Thread):
             if last_frame:
                 self.fps = 0.9 * self.fps + 0.1 / max(1e-3, now - last_frame)  # smoothed frames per second
             last_frame = now
-            faces = self.engine.detect(frame)
+            faces = self.engine.detect(frame) if self.engine else []
             self.face_px = int(faces[0][2]) if len(faces) else None
             snap = self.backend.snapshot()
             self.handled &= {p["studentId"] for p in snap["pending"]}  # forget once the server agrees
@@ -616,7 +637,7 @@ class DoorEngine(threading.Thread):
             label = None
             # no lock here: face maths is slow and the window must never wait for it.
             # state() only reads whole attributes, which are swapped atomically.
-            if self.enrolling is None:
+            if self.enrolling is None and self.engine:   # no models: leave enrolments for later
                 todo = [p for p in snap["pending"] if p["studentId"] not in self.handled]
                 if todo and not showing:
                     self.enrolling = {"student": todo[0], "started": time.time(), "samples": [], "last": 0, "frame": frame}
@@ -880,7 +901,7 @@ class DoorWindow:
         if 0 <= i < len(cams):
             index = cams[i][0]
             self.door.request_camera(index)
-            save_camera_choice(index)
+            save_setting("camera", index)
 
     def _rescan(self):
         self.rescan_btn.config(state="disabled", text="Scanning…")
@@ -1043,7 +1064,6 @@ class DoorWindow:
             box = tk.Frame(w, bg=PANEL)
             box.pack(fill="x")
             box.columnconfigure(1, weight=1)
-            from arduino_link import TEST_STEPS
             for r, (key, label, _) in enumerate(TEST_STEPS):
                 icon = tk.Label(box, text="·", bg=PANEL, font=("Segoe UI Semibold", 14), width=2)
                 icon.grid(row=r * 3, column=0, sticky="nw")
@@ -1122,6 +1142,8 @@ class DoorWindow:
             self.banner.config(text=r[1], bg={"granted": OK_BG, "already": WARN_BG}.get(r[0], BAD_BG), fg="white")
         elif st["enrolling"]:
             self.banner.config(text=f"Enrolling {st['enrolling']['name']}", bg=WARN_BG, fg="white")
+        elif st["problem"]:   # a dependency could not be installed (see check_dependencies.py)
+            self.banner.config(text="Face recognition unavailable\nsee the Activity log", bg=WARN_BG, fg="white")
         elif not st["recognising"]:
             self.banner.config(text="Recognition is off\npress Start recognition to scan students", bg=IDLE_BG, fg=MUTED)
         elif st["arduino"] and not st["gate_open"]:
@@ -1171,7 +1193,10 @@ def warn_duplicate_faces(store):
     return pairs
 
 
-def run_gui(args):
+def start_door(args):
+    """Start the three worker threads (server, Arduino, camera). Returns (door, backend, link)."""
+    for problem in SETUP_PROBLEMS:   # already printed by check_dependencies.py; this puts them in the Activity panel
+        LOG.append(f"{time.strftime('%H:%M:%S')} NOT READY: {problem}")
     store = FaceStore(DATA)
     warn_duplicate_faces(store)
     client = SrsClient(args.url, args.device_id, args.key)
@@ -1184,15 +1209,43 @@ def run_gui(args):
     log(f"backend {args.url}; device #{args.device_id}")
     backend.start()   # waits out a sleeping Render server by itself (shows OFFLINE until it answers)
     door.start()
-    DoorWindow(args, door, backend, link).run()
+    return door, backend, link
+
+
+def stop_door(door, backend, link):
+    door.stop.set()
+    backend.stop.set()
+    link.stop.set()
     link.disconnect()   # says goodbye: the Arduino's LCD shows NOT CONNECTED
     door.join(timeout=3)
     log(f"stopped ({len(backend.events)} event(s) still queued; they upload next time)")
 
 
+def run_gui(args):
+    door, backend, link = start_door(args)
+    try:
+        DoorWindow(args, door, backend, link).run()
+    finally:
+        stop_door(door, backend, link)
+
+
+def run_console(args):
+    """Without Tkinter: the same door, no window. Recognition starts straight away; Ctrl+C stops it."""
+    door, backend, link = start_door(args)
+    log("no window (Tkinter is missing): running in the console, press Ctrl+C to stop")
+    door.toggle_recognition()
+    try:
+        while door.is_alive():
+            door.join(timeout=1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        stop_door(door, backend, link)
+
+
 def key_help(device_id):
     return (f"device key not accepted for device #{device_id}: copy the key from the web app "
-            "(Venues & Devices > PC-01 > Copy) into device_key in config.ini, then restart")
+            "(Venues & Devices > this device > Reveal) into device_key in config.ini, then restart")
 
 
 def check(args):
@@ -1213,20 +1266,28 @@ def check(args):
     log(f"faces stored on this PC: {len(store.people)}")
     pairs = warn_duplicate_faces(store)
     log(f"faces stored for two students: {len(pairs) or 'none'}")
-    FaceEngine()
-    log("face models load OK.")
+    if FaceEngine is not None and "face models missing" not in " ".join(SETUP_PROBLEMS):
+        FaceEngine()
+        log("face models load OK.")
     cams = list_cameras()
     log("cameras: " + (", ".join(f"#{i} {w}x{h}" for i, w, h in cams) or "none found")
         + (f"  (auto picks #{auto_camera(cams)})" if cams else ""))
     ports = available_ports()
     log("serial ports: " + (", ".join(f"{p} ({d})" for p, d in ports) or "none")
         + (f"  (Arduino looks like {guess_arduino_port()})" if guess_arduino_port() else ""))
-    log("Everything is ready.")
+    for problem in SETUP_PROBLEMS:
+        log("NOT READY:", problem)
+    log("Everything is ready." if not SETUP_PROBLEMS else f"{len(SETUP_PROBLEMS)} dependency problem(s), see above.")
 
 
 if __name__ == "__main__":
     settings = load_settings()
     try:
-        check(settings) if settings.check else run_gui(settings)
+        if settings.check:
+            check(settings)
+        elif tk is None:
+            run_console(settings)
+        else:
+            run_gui(settings)
     except SrsError as e:
         raise SystemExit(f"Backend refused: {e}" + (f"\n{key_help(settings.device_id)}" if e.status in (401, 404) else ""))

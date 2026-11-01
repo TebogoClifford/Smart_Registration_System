@@ -202,7 +202,7 @@ class ArduinoLink(threading.Thread):
                 self.firmware = parts[1] if len(parts) > 1 else self.firmware
             elif parts[0] == "T":
                 self.test_lines.append((now, msg))
-        if parts[0] in ("HELLO",):
+        if parts[0] == "HELLO":
             self.log(f"Arduino: {msg}")
 
     # -- what the window and the door engine read
