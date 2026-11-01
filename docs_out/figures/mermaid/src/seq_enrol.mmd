@@ -6,7 +6,7 @@ sequenceDiagram
     participant DB as PostgreSQL
     participant PC as PC door program
     actor S as Student
-    I->>UI: enter details, venue, device, tick consent, Start enrollment
+    I->>UI: enter details, venue, device, tick consent, Start enrolment
     activate UI
     UI->>+API: POST /api/students
     API->>DB: INSERT students (enrollment_status = pending)
@@ -24,7 +24,7 @@ sequenceDiagram
         end
     end
     activate PC
-    PC->>PC: window shows "ENROLLING name"
+    PC->>PC: window shows "Enrolling name"
     S->>PC: stands at the marker, faces camera
     loop 5 samples, 0.25 s apart
         PC->>PC: one face >= 90 px? detect + embed
@@ -39,7 +39,7 @@ sequenceDiagram
     else time-out
         PC->>API: PUT /api/students/{id}/enrollment (status: failed)
         API->>DB: UPDATE students SET enrollment_status = failed
-        UI-->>I: "Failed" - Try again / Re-enroll
+        UI-->>I: "Failed" - Try again / Re-enrol
     end
     deactivate PC
     deactivate UI
