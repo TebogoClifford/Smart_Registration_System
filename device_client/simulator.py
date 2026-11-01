@@ -11,9 +11,12 @@ Environment variables BASE_URL, DEVICE_ID and DEVICE_KEY work too.
 """
 import argparse
 import os
+import sys
 import time
+from pathlib import Path
 
-from srs_client import SrsClient, SrsError
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "pc_device"))  # srs_client.py lives with the PC program
+from srs_client import SrsClient, SrsError  # noqa: E402
 
 # A few bytes that look like the start of a JPEG; the real program sends the webcam frame.
 FAKE_JPEG = bytes([0xFF, 0xD8, 0xFF, 0xE0, 0, 0x10, 0x4A, 0x46, 0x49, 0x46, 0, 1, 0xFF, 0xD9])

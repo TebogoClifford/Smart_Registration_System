@@ -8,7 +8,6 @@ python -m pip install -r requirements.txt pyinstaller || goto :error
 python download_models.py || goto :error
 
 python -m PyInstaller --noconfirm --clean --onefile --windowed --name "SRS Door" ^
-  --paths ..\device_client ^
   --add-data "models\face_detection_yunet_2023mar.onnx;models" ^
   --add-data "models\face_recognition_sface_2021dec.onnx;models" ^
   --add-data "config.example.ini;." ^

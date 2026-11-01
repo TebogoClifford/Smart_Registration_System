@@ -1,6 +1,6 @@
 # Device API (door device ⇄ backend)
 
-How a door device talks to the backend. The door device in use is the PC program ([`../pc_device`](../pc_device/README.md), through [`../device_client/srs_client.py`](../device_client/srs_client.py)); an ESP32-CAM would use the same calls.
+How a door device talks to the backend. The door device in use is the PC program ([`../pc_device`](../pc_device/README.md), through [`../pc_device/srs_client.py`](../pc_device/srs_client.py)); an ESP32-CAM would use the same calls.
 
 Plain HTTP(S) with JSON. The backend cannot call the device (it sits behind a router), so the device **polls**.
 

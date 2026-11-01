@@ -92,7 +92,6 @@ except (ImportError, AttributeError) as _err:
 FROZEN = getattr(sys, "frozen", False)  # running as the one-file "SRS Door.exe" (build_exe.bat)
 HERE = Path(sys.executable).parent if FROZEN else Path(__file__).resolve().parent  # config.ini and data/ live here
 BUNDLE = Path(sys._MEIPASS) if FROZEN else HERE  # files packed inside the .exe (models, config.example.ini)
-sys.path.insert(0, str(HERE.parent / "device_client"))
 from srs_client import SrsClient, SrsError  # noqa: E402  (works without requests: stays OFFLINE)
 from cameras import auto_camera, list_cameras, open_camera  # noqa: E402
 from arduino_link import (MAX_CM, MIN_CM, TEST_STEPS, ArduinoLink, available_ports,  # noqa: E402

@@ -1,6 +1,6 @@
 # PC door program (webcam face recognition)
 
-`srs_pc_app.py` turns a Windows PC with a USB webcam into an SRS door device. It talks to the backend through the same device API an ESP32-CAM would use (see [`../Backend/DEVICE_API.md`](../Backend/DEVICE_API.md)), using [`../device_client/srs_client.py`](../device_client/srs_client.py).
+`srs_pc_app.py` turns a Windows PC with a USB webcam into an SRS door device. It talks to the backend through the same device API an ESP32-CAM would use (see [`../Backend/DEVICE_API.md`](../Backend/DEVICE_API.md)), using [`srs_client.py`](srs_client.py).
 
 | What happens | What you see |
 |---|---|

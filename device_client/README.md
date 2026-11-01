@@ -11,7 +11,7 @@ Dashboard polls           ->  access events appear       <-  POST /access-events
 
 **How to read it:** each row is one step. The left column is what a person sees on the web console, the middle what the backend stores, the right what the PC sends. The arrows point at the backend because both sides only ever ask it; it never calls them.
 
-* `srs_client.py` – import this in a face-recognition program. Handles the device key, long timeouts (Render wakes up slowly), retries on network errors and 5xx answers, and duplicate-proof event uploads (`send_batch`, or `send_event` for a single decision).
+* [`../pc_device/srs_client.py`](../pc_device/srs_client.py) – the connection to the backend, used by the PC program and by `simulator.py`. It lives in `pc_device/` so that folder runs on its own. Handles the device key, long timeouts (Render wakes up slowly), retries on network errors and 5xx answers, and duplicate-proof event uploads (`send_batch`, or `send_event` for a single decision).
 * `simulator.py` – runs the whole device flow with no camera, to prove the web console works with Python.
 * The real webcam program is [`../pc_device/srs_pc_app.py`](../pc_device/README.md).
 
