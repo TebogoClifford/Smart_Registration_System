@@ -11,7 +11,7 @@ import { useDraft } from '@/lib/drafts';
 import OverrideDialog from '@/components/OverrideDialog';
 import ExamCalendarView from '@/components/ExamCalendarView';
 import RecognisedNow from '@/components/RecognisedNow';
-import { localDate, addDays, parseDate, groupSittings } from '@/lib/exams';
+import { addDays, parseDate, groupSittings, examDate, examTime, examHour } from '@/lib/exams';
 import {
   RefreshCcw, Wifi, WifiOff, AlertCircle, Download, Filter, UserPlus, Search,
   Users, CheckCircle2, XCircle, Activity, TrendingUp, MapPin, ArrowUpRight, CalendarDays, Armchair
@@ -30,7 +30,13 @@ const normalizeEvent = (event) => ({
   event_time: event.event_time ?? event.timestamp ?? null,
   student_id: event.student_id ?? event.studentId ?? null,
   device_id: event.device_id ?? event.deviceId ?? null,
+  device_name: event.deviceName ?? null,        // names, so the table never shows bare database ids
+  student_number: event.studentNumber ?? null,
+  student_name: event.studentName ?? null,
 });
+// "Thabo Nkosi (220123456)", or "Unknown face" for a face that matched nobody
+const studentLabel = (e) => (e.student_number ? `${e.student_name ?? ''} (${e.student_number})`.trim() : e.student_id ? `Student #${e.student_id}` : 'Unknown face');
+const deviceLabel = (e) => e.device_name ?? (e.device_id != null ? `Device #${e.device_id}` : 'Unknown device');
 
 function StatusIndicator({ status }) {
   const settings = {
@@ -112,7 +118,7 @@ function niceTop(max) {
 function TrendBars({ data, max }) {
   const [hover, setHover] = useState(null);
   const { top, step } = niceTop(max);
-  const today = localDate();
+  const today = examDate();
   const rows = data.map((d) => {
     const granted = Number(d.granted) || 0;
     const denied = Number(d.denied) || 0;
@@ -185,12 +191,15 @@ function TrendBars({ data, max }) {
           </span>
         ))}
       </div>
-      {/* the same numbers as a table, for screen readers */}
-      <table className="sr-only">
-        <caption>Access decisions per day, last 7 days</caption>
-        <thead><tr><th>Day</th>{TREND_SERIES.map((s) => <th key={s.key}>{s.label}</th>)}<th>Total</th></tr></thead>
-        <tbody>{rows.map((r) => <tr key={r.date}><td>{r.date}</td>{TREND_SERIES.map((s) => <td key={s.key}>{r[s.key]}</td>)}<td>{r.total}</td></tr>)}</tbody>
-      </table>
+      {/* the same numbers as a table, for screen readers. sr-only sits on a div: a <table> ignores
+          the 1px width and widened the page on phones */}
+      <div className="sr-only">
+        <table>
+          <caption>Access decisions per day, last 7 days</caption>
+          <thead><tr><th>Day</th>{TREND_SERIES.map((s) => <th key={s.key}>{s.label}</th>)}<th>Total</th></tr></thead>
+          <tbody>{rows.map((r) => <tr key={r.date}><td>{r.date}</td>{TREND_SERIES.map((s) => <td key={s.key}>{r[s.key]}</td>)}<td>{r.total}</td></tr>)}</tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -225,14 +234,14 @@ function ExamHallBookings({ refreshKey }) {
   useEffect(() => {
     let alive = true;
     const today = new Date();
-    Promise.all([api.getBookings({ from: localDate(today), to: localDate(addDays(today, EXAM_DAYS_AHEAD)) }), api.getVenues()])
+    Promise.all([api.getBookings({ from: examDate(today), to: examDate(addDays(today, EXAM_DAYS_AHEAD)) }), api.getVenues()])
       .then(([b, v]) => { if (alive) { setBookings(b); setVenues(v); setFailed(false); } })
       .catch((error) => { console.error('Failed to load exam bookings:', error); if (alive) setFailed(true); });
     return () => { alive = false; };
   }, [refreshKey]);
 
   const sittings = useMemo(() => groupSittings(bookings ?? []), [bookings]);
-  const today = localDate();
+  const today = examDate();
   const todays = sittings.filter((s) => s.date === today);
   const seatsBooked = sittings.reduce((n, s) => n + s.modules.reduce((m, x) => m + x.seats, 0), 0);
   const noSeats = venues.filter((v) => !(v.capacity > 0));
@@ -295,7 +304,7 @@ export default function Dashboard() {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [clock, setClock] = useState(() => Date.now());
   const [decisionFilter, setDecisionFilter] = useDraft('dash:decision', 'all');
-  const [dateFilter, setDateFilter] = useState(localDate());
+  const [dateFilter, setDateFilter] = useState(examDate());
   const [searchTerm, setSearchTerm] = useDraft('dash:search', '');
   const [errorMessage, setErrorMessage] = useState('');
   const [statsWarning, setStatsWarning] = useState('');
@@ -349,17 +358,17 @@ export default function Dashboard() {
     const query = searchTerm.trim().toLowerCase();
     return events.filter((event) => {
       const decision = String(event.decision || '').toLowerCase();
-      const eventDay = event.event_time ? localDate(new Date(event.event_time)) : '';
+      const eventDay = event.event_time ? examDate(event.event_time) : '';
       const matchesDecision = decisionFilter === 'all' || decision === decisionFilter;
       const matchesDate = !dateFilter || eventDay === dateFilter;
-      const matchesSearch = !query || [event.student_id, event.device_id, event.decision, event.id]
+      const matchesSearch = !query || [event.student_number, event.student_name, event.device_name, event.decision, event.id]
         .some((value) => String(value ?? '').toLowerCase().includes(query));
       return matchesDecision && matchesDate && matchesSearch;
     });
   }, [events, searchTerm, decisionFilter, dateFilter]);
 
   const fallbackStats = useMemo(() => {
-    const today = events.filter((event) => event.event_time && localDate(new Date(event.event_time)) === localDate() && event.decision !== 'signed_out');
+    const today = events.filter((event) => event.event_time && examDate(event.event_time) === examDate() && event.decision !== 'signed_out');
     return {
       total: today.length,
       granted: today.filter((event) => String(event.decision).toLowerCase() === 'granted').length,
@@ -383,17 +392,17 @@ export default function Dashboard() {
 
   const exportCSV = () => {
     const rows = [
-      ['Time', 'Student ID', 'Device ID', 'Decision', 'Event ID'],
+      ['Time (exam time zone)', 'Student number', 'Student name', 'Device', 'Decision', 'Event ID'],
       ...filteredEvents.map((event) => [
-        event.event_time ? new Date(event.event_time).toLocaleString() : '',
-        event.student_id || 'N/A', event.device_id || 'N/A', event.decision || 'Unknown', event.id ?? '',
+        examTime(event.event_time, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        event.student_number ?? '', event.student_name ?? (event.student_id ? '' : 'Unknown face'), deviceLabel(event), event.decision || 'Unknown', event.id ?? '',
       ]),
     ];
     const csv = rows.map((row) => row.map(csvCell).join(',')).join('\r\n');
     const url = URL.createObjectURL(new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8;' }));
     const link = document.createElement('a');
     link.href = url;
-    link.download = `access-events-${localDate()}.csv`;
+    link.download = `access-events-${examDate()}.csv`;
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -418,7 +427,7 @@ export default function Dashboard() {
         <div className="relative flex flex-col justify-between gap-5 sm:flex-row sm:items-center">
           <div>
             <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.2em] text-blue-200">Operations overview</p>
-            <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">Good {new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 18 ? 'afternoon' : 'evening'}.</h2>
+            <h2 className="text-2xl font-bold tracking-tight sm:text-3xl">Good {examHour() < 12 ? 'morning' : examHour() < 18 ? 'afternoon' : 'evening'}.</h2>
             <p className="mt-2 max-w-xl text-sm leading-relaxed text-blue-100/80">A live view of student access, registration progress, and venue activity.</p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
@@ -449,7 +458,7 @@ export default function Dashboard() {
         <StatCard label="Access granted" value={todayStats.granted.toLocaleString()} detail={summary.alreadyInside ? `Students let in · ${Number(summary.alreadyInside).toLocaleString()} seen again (already inside)` : 'Students let in (once per exam session)'} Icon={CheckCircle2} tone="green" />
         <StatCard label="Access denied" value={todayStats.denied.toLocaleString()} detail={summary.sessionEnded ? `Denied access checks · ${Number(summary.sessionEnded).toLocaleString()} after their session ended` : 'Denied access checks'} Icon={XCircle} tone="red" />
         <StatCard label="Registered students" value={totalStudents === null ? '—' : totalStudents.toLocaleString()} detail={totalStudents === null ? 'Student directory total' : `${enrolled.toLocaleString()} enrolled · ${Math.max(0, totalStudents - enrolled).toLocaleString()} not yet enrolled`} Icon={Users} tone="violet"
-          footer={totalStudents !== null && <><div className="mb-1.5 flex items-center justify-between text-[11px] text-slate-500"><span>Enrollment progress</span><span className="font-semibold text-slate-700">{enrollmentRate}%</span></div><div className="h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-violet-500 transition-all" style={{ width: `${Math.min(100, Math.max(0, enrollmentRate))}%` }} /></div></>} />
+          footer={totalStudents !== null && <><div className="mb-1.5 flex items-center justify-between text-[11px] text-slate-500"><span>Enrolment progress</span><span className="font-semibold text-slate-700">{enrollmentRate}%</span></div><div className="h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-violet-500 transition-all" style={{ width: `${Math.min(100, Math.max(0, enrollmentRate))}%` }} /></div></>} />
       </section>
 
       <section className="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(320px,1fr)_minmax(0,1.55fr)]">
@@ -510,14 +519,14 @@ export default function Dashboard() {
               <p className="mt-2 max-w-sm text-sm text-slate-500">{events.length === 0 ? 'Events will appear here after a student is scanned at a registered device.' : 'Try changing the date, decision filter, or search term.'}</p>
               {events.length === 0
                 ? <Button variant="outline" size="sm" onClick={() => navigate('/enroll')} className="mt-5 gap-2 rounded-lg"><UserPlus size={15} /> Enrol a student</Button>
-                : <Button variant="outline" size="sm" onClick={() => { setSearchTerm(''); setDecisionFilter('all'); setDateFilter(localDate()); }} className="mt-5 rounded-lg">Clear filters</Button>}
+                : <Button variant="outline" size="sm" onClick={() => { setSearchTerm(''); setDecisionFilter('all'); setDateFilter(examDate()); }} className="mt-5 rounded-lg">Clear filters</Button>}
             </div> :
             <div className="overflow-x-auto">
               <Table>
                 <TableHeader><TableRow className="bg-slate-50/80 hover:bg-slate-50/80">
                   <TableHead className="whitespace-nowrap px-5 py-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Time</TableHead>
                   <TableHead className="whitespace-nowrap px-5 py-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Device</TableHead>
-                  <TableHead className="whitespace-nowrap px-5 py-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Student ID</TableHead>
+                  <TableHead className="whitespace-nowrap px-5 py-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Student</TableHead>
                   <TableHead className="whitespace-nowrap px-5 py-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Decision</TableHead>
                   <TableHead className="whitespace-nowrap px-5 py-2 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Event ID</TableHead>
                   <TableHead className="whitespace-nowrap px-5 py-2 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Action</TableHead>
@@ -528,12 +537,12 @@ export default function Dashboard() {
                     {/* slim rows: date and time on one line */}
                     <TableCell className="whitespace-nowrap px-5 py-1.5">
                       {event.event_time ? <>
-                        <span className="text-xs text-slate-400">{new Date(event.event_time).toLocaleDateString()}</span>{' '}
-                        <span className="font-medium text-slate-800">{new Date(event.event_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                        <span className="text-xs text-slate-400">{examTime(event.event_time, { year: 'numeric', month: '2-digit', day: '2-digit' })}</span>{' '}
+                        <span className="font-medium text-slate-800">{examTime(event.event_time, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
                       </> : '—'}
                     </TableCell>
-                    <TableCell className="px-5 py-1.5 font-medium text-slate-700">{event.device_id ?? 'Unknown device'}</TableCell>
-                    <TableCell className="px-5 py-1.5 font-mono text-xs text-slate-600">{event.student_id || 'N/A'}</TableCell>
+                    <TableCell className="px-5 py-1.5 font-medium text-slate-700">{deviceLabel(event)}</TableCell>
+                    <TableCell className="px-5 py-1.5 text-xs text-slate-600">{studentLabel(event)}</TableCell>
                     <TableCell className="px-5 py-1.5">{decisionBadge(event.decision)}</TableCell>
                     <TableCell className="px-5 py-1.5 text-right font-mono text-xs text-slate-400">{event.id ?? '—'}</TableCell>
                     <TableCell className="px-5 py-1.5 text-right">

@@ -1,0 +1,45 @@
+sequenceDiagram
+    autonumber
+    actor I as Invigilator
+    participant UI as SRS Console
+    participant API as Backend API
+    participant DB as PostgreSQL
+    participant PC as PC door program
+    actor S as Student
+    I->>UI: enter details, venue, device, tick consent, Start enrolment
+    activate UI
+    UI->>+API: POST /api/students
+    API->>DB: INSERT students (enrollment_status = pending)
+    API-->>-UI: 201 {id}
+    par console waits
+        loop every 3 s until enrolled or failed (max 10 min)
+            UI->>API: GET /api/students/{id}
+            API-->>UI: enrollment_status
+        end
+    and door program polls
+        loop every 3 s
+            PC->>+API: GET /api/devices/{id}/pending-enrollments
+            API->>DB: pending students of this device (last 10 min)
+            API-->>-PC: [studentId, studentNumber, name]
+        end
+    end
+    activate PC
+    PC->>PC: window shows "Enrolling name"
+    S->>PC: stands at the marker, faces camera
+    loop 5 samples, 0.25 s apart
+        PC->>PC: one face >= 90 px? detect + embed
+    end
+    alt 5 good samples within 60 s
+        PC->>PC: average embeddings, save embedding file and photo
+        PC->>API: PUT /api/students/{id}/enrollment-image (JPEG)
+        PC->>+API: PUT /api/students/{id}/enrollment (status: enrolled)
+        API->>DB: UPDATE students SET enrollment_status = enrolled
+        API-->>-PC: 200
+        UI-->>I: "Enrolled"
+    else time-out
+        PC->>API: PUT /api/students/{id}/enrollment (status: failed)
+        API->>DB: UPDATE students SET enrollment_status = failed
+        UI-->>I: "Failed" - Try again / Re-enrol
+    end
+    deactivate PC
+    deactivate UI

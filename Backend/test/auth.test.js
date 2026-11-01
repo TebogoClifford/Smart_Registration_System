@@ -74,6 +74,7 @@ test('invigilator: may run enrolment and bookings, may not manage venues, device
   assert.strictEqual((await call('POST', '/api/venues', { name: 'Nope', capacity: 10 }, bearer(ctx.inv))).status, 403);
   assert.strictEqual((await call('POST', '/api/devices', { venue_id: 1, name: 'Nope' }, bearer(ctx.inv))).status, 403);
   assert.strictEqual((await call('GET', '/api/users', undefined, bearer(ctx.inv))).status, 403);
+  assert.strictEqual((await call('POST', '/api/devices/1/regenerate-key', undefined, bearer(ctx.inv))).status, 403);
   assert.strictEqual((await call('POST', '/api/users', { email: 'z@test.local', name: 'z', password: 'zzzzzzzz' }, bearer(ctx.inv))).status, 403);
 });
 

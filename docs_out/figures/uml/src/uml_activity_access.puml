@@ -1,0 +1,54 @@
+@startuml
+!include style.iuml
+skinparam ActivityFontSize 13
+skinparam ArrowFontSize 12
+|Student|
+start
+:Walk up to the door unit;
+|Arduino door unit|
+repeat
+  :Measure distance\n(HC-SR04, every 60 ms);
+  switch (distance?)
+  case ([< 25 cm])
+    :LCD "Too close";
+  case ([> 50 cm])
+    :LCD "Come closer";
+  case ([25-50 cm])
+    :LCD "Hold still";
+  endswitch
+repeat while (held in window for 1 s?) is ([no]) not ([yes])
+:Beep and send READY;
+|PC door program|
+:Capture webcam frame;
+:Detect largest face (YuNet)\nand compute embedding (SFace);
+:Compare with all faces\nstored on this PC;
+if (similarity >= 0.40\nin 3 frames in a row?) then ([no])
+  :decision = denied;
+else ([yes])
+  if (session over?) then ([yes])
+    :decision = ended;
+  else ([no])
+    if (already let in\nthis session?) then ([yes])
+      :decision = already;
+    else ([no])
+      :decision = granted\n(show seat N + module);
+    endif
+  endif
+endif
+fork
+  :Send G / D / A\nto the Arduino;
+  |Arduino door unit|
+  :Show result on LCD\nand beep;
+  |Student|
+  if (decision = granted?) then ([yes])
+    :Enter the venue;
+  else ([no])
+    :Show student card\nto the invigilator;
+  endif
+fork again
+  |Backend|
+  :Store event (uploaded from the\nPC's disk queue when online,\nduplicates ignored);
+  :Show event on dashboard;
+end fork
+stop
+@enduml

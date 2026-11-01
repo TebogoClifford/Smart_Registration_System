@@ -1,43 +1,67 @@
-# Frontend-to-Backend Connection Guide
+# Frontend-to-backend connection guide
 
-This document describes how the React frontend communicates with the Node.js/Express backend for the Smart Registration System.
+How the React web console talks to the Node.js/Express backend. Every call goes through one API client, `src/lib/api.js`.
 
-## 1. Communication Layer
-The frontend uses a centralized API client located at `src/lib/api.js`. 
-- **Base URL:** Configured via the environment variable `VITE_API_BASE_URL`.
-- **Format:** All data is exchanged as JSON over HTTP.
-- **Error Handling:** The API client extracts the `error` field from the backend response and throws it as a JavaScript `Error`, which is then caught by page components and displayed as a `sonner` toast notification.
+## 1. Communication layer
+- **Base URL:** `VITE_API_BASE_URL` (set in `.env.local` for a local backend); without it the Render deployment is used.
+- **Format:** JSON over HTTPS. Timeout 60 s, because Render's free plan sleeps and takes up to a minute to wake up.
+- **Sign-in:** after `POST /api/auth/login` the token is kept in the browser (`localStorage`) and sent with every request as `Authorization: Bearer <token>`. A `401` signs the user out; a `403` with code `PASSWORD_CHANGE_REQUIRED` opens the change-password screen.
+- **Errors:** the client copies the backend's `{ "error": "..." }` into `err.message`, so pages show the real reason in a toast notification (for example "Exam hall 1 does not have enough seats …"). No answer at all → "Cannot reach the server".
+- **Times:** shown in the exam time zone (`VITE_EXAM_TIMEZONE`, default `Africa/Johannesburg`, see `src/lib/exams.js`), whatever the viewer's computer is set to.
 
-## 2. Route Mapping
+## 2. Pages and the calls they make
 
-| Frontend Page | Action | API Method | Backend Endpoint | Purpose |
+| Page | Action | API method | Backend endpoint | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| **Dashboard** | Load Feed | `getAccessEvents` | `GET /api/access-events` | Polls every 15s for live logs |
-| **Venues** | List Venues | `getVenues` | `GET /api/venues` | Fetch all venues |
-| | Add Venue | `createVenue` | `POST /api/venues` | Create new venue |
-| **Venue Detail** | Edit Name | `updateVenue` | `PUT /api/venues/:id` | Update venue name |
-| | Delete | `deleteVenue` | `DELETE /api/venues/:id` | Delete (blocked if devices exist) |
-| **Devices** | List Devices | `getDevices` | `GET /api/devices` | Fetch all devices |
-| | Add Device | `createDevice` | `POST /api/devices` | Assign device to venue |
-| **Device Detail** | Edit Name | `updateDevice` | `PUT /api/devices/:id` | Update device metadata |
-| | Delete | `deleteDevice` | `DELETE /api/devices/:id` | Delete (blocked if students exist) |
-| **Students** | List Students | `getStudents` | `GET /api/students` | Fetch all student records |
-| **Student Detail** | Edit Info | `updateStudent` | `PUT /api/students/:id` | Update student details |
-| | Delete | `deleteStudent` | `DELETE /api/students/:id` | Remove student record |
-| **Enroll** | Initialize | `createStudent` | `POST /api/students` | Create 'pending' student record |
-| | Wait for device | `getStudent` | `GET /api/students/:id` | Polls every 3s until the device reports `enrolled` or `failed` (gives up after 10 min) |
-| | Try again / Re-enroll | `reEnrollStudent` | `POST /api/students/:id/re-enroll` | Sets the student back to `pending` so the device captures again |
+| **Sign-in** | Is sign-in required? | `getAuthStatus` | `GET /api/auth/status` | |
+| | Sign in | `login` | `POST /api/auth/login` | 5 failed tries per 15 min are refused |
+| **My account** | Load / edit own details | `me`, `updateMe` | `GET` / `PUT /api/auth/me` | |
+| | Change password | `changePassword` | `PUT /api/auth/password` | Also the forced first-sign-in screen |
+| **Dashboard** | Access events | `getAccessEvents` | `GET /api/access-events` | Every 15 s; each event carries device name, student number and name |
+| | Figures and charts | `getStats` | `GET /api/stats` | Every 15 s |
+| | Recognised now | `getRecognitions` | `GET /api/access-events/recognitions` | Every 3 s |
+| | Exam hall bookings (next 14 days) | `getBookings`, `getVenues` | `GET /api/bookings`, `GET /api/venues` | |
+| | Override a denied entry | `overrideEvent` | `POST /api/access-events/:id/override` | Records who and why |
+| | Export CSV | – | – | Made in the browser from the events shown |
+| **Venues & Devices** | List | `getVenues`, `getDevices` | `GET /api/venues`, `GET /api/devices` | Device status every 10 s |
+| | Add a venue / device (admin) | `createVenue`, `createDevice` | `POST /api/venues`, `POST /api/devices` | |
+| **Venue detail** | Load | `getVenue`, `getDevicesByVenue` | `GET /api/venues/:id`, `GET /api/venues/:id/devices` | |
+| | Edit name and capacity (admin) | `updateVenue` | `PUT /api/venues/:id` | |
+| | Delete (admin) | `deleteVenue` | `DELETE /api/venues/:id` | Refused while devices or exam bookings use it |
+| **Device detail** | Load | `getDevice`, `getVenues`, `getStudents` | `GET /api/devices/:id`, … | The key is only sent to administrators |
+| | Edit name and venue (admin) | `updateDevice` | `PUT /api/devices/:id` | |
+| | Replace key (admin) | `regenerateDeviceKey` | `POST /api/devices/:id/regenerate-key` | The old key stops working at once |
+| | Delete (admin) | `deleteDevice` | `DELETE /api/devices/:id` | Refused while students or access events belong to it |
+| **Student list** | List, search, filter | `getStudents`, `getDevices`, `getModules`, `getCourses` | `GET /api/students`, … | Status filter includes *Request expired* |
+| **Student detail** | Edit details | `updateStudent` | `PUT /api/students/:id` | A new device sets enrolment back to *pending*, so that device captures the face |
+| | Modules | `setStudentModules` | `PUT /api/students/:id/modules` | Seats follow the modules |
+| | Enrol face / Re-enrol | `reEnrollStudent` | `POST /api/students/:id/re-enroll` | Polls `GET /api/students/:id` every 3 s |
+| | Enrolment photo | `getStudentPhotoUrl` | `GET /api/students/:id/enrollment-image` | |
+| | Delete | `deleteStudent` | `DELETE /api/students/:id` | Access history is kept |
+| **Enrolment** | Start enrolment | `createStudent` | `POST /api/students` | Creates a *pending* student the device captures |
+| | Wait for the device | `getStudent` | `GET /api/students/:id` | Every 3 s until `enrolled` or `failed`; stops when `enrollment_expired` is true |
+| | Try again / Re-enrol | `reEnrollStudent` | `POST /api/students/:id/re-enroll` | |
 | | Cancel / Edit details | `deleteStudent` | `DELETE /api/students/:id` | Removes the unfinished record |
+| **Modules** | List, add, edit, delete | `getModules`, `createModule`, `updateModule`, `deleteModule` | `/api/modules` | Delete refused while the module has bookings |
+| | Students of a module | `getModuleStudents`, `addModuleStudents`, `removeModuleStudent` | `/api/modules/:id/students` | |
+| **Exam bookings** | Book a hall | `getAvailability`, `getDateAvailability`, `createBooking` | `GET /api/bookings/availability`, `GET /api/bookings/date-availability`, `POST /api/bookings` | Seats every student of the module |
+| | Seats | `getBooking` | `GET /api/bookings/:id` | Shows how many can be recognised at the door; **Print sign-in sheet** is made in the browser |
+| | Email students | `notifyBooking` | `POST /api/bookings/:id/notify` | Emails every seated student their exam details again |
+| | Edit (move) | `updateBooking` | `PUT /api/bookings/:id` | |
+| | Cancel | `cancelBooking` | `DELETE /api/bookings/:id` | |
+| **Exam calendar** | Month view | `getBookings`, `getVenues` | `GET /api/bookings?from=&to=` | |
+| **Email log** | List, mode | `getEmails`, `getEmailStatus` | `GET /api/emails`, `GET /api/emails/status` | |
+| | Send failed again | `retryEmails` | `POST /api/emails/retry` | |
+| **Accounts** (admin) | List, add, edit, delete | `getUsers`, `createUser`, `updateUser`, `deleteUser` | `/api/users` | |
+| | Reset password | `resetUserPassword` | `POST /api/users/:id/reset-password` | Shows a temporary password once |
 
-## 3. Key Logic Flows
+## 3. Key logic flows
 
-### Block-on-Delete Pattern
-1. **UI:** User clicks "Confirm Delete" $\rightarrow$ `api.deleteVenue(id)`.
-2. **Backend:** Checks database for dependent records (e.g., devices assigned to venue).
-3. **Response:** If dependents exist, backend returns `409 Conflict` with `{"error": "Cannot delete venue: X device(s) still assigned"}`.
-4. **UI:** Frontend catches error $\rightarrow$ `toast.error(err.message)` $\rightarrow$ User sees the specific reason.
+### Refused deletes
+1. **UI:** the user confirms a delete → e.g. `api.deleteVenue(id)`.
+2. **Backend:** checks for records that depend on it (devices or bookings in the venue).
+3. **Response:** `409 Conflict` with a reason, e.g. `{"error": "Cannot delete venue: 2 device(s) still assigned. Remove them first."}`.
+4. **UI:** `toast.error(err.message)` shows that reason.
 
-### Live Polling Pattern
-1. **Component:** `Dashboard.jsx` uses `useEffect` with `setInterval`.
-2. **Action:** Every 5000ms, `api.getAccessEvents()` is called.
-3. **UI:** State is updated, and the table re-renders with new access logs and color-coded status badges.
+### Live updates (polling)
+The backend cannot push to the browser, so pages ask again on a timer (`setInterval` in a `useEffect`): the Dashboard's events and figures every 15 s, *Recognised now* every 3 s, device status every 10 s, and a running enrolment every 3 s.

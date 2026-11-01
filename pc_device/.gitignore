@@ -1,7 +1,11 @@
+# holds the device key
 config.ini
+# downloaded by download_models.py / check_dependencies.py
 models/*.onnx
 models/*.part
+# faces, photos and the offline event queue stay on this PC
 data/
+*.tmp
 __pycache__/
 build/
 dist/

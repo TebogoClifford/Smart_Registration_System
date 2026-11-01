@@ -1,180 +1,77 @@
+"""webcam_test.py - check the webcams on their own, without the door program or the server.
 
-import cv2
+Lists every camera that delivers a picture, then shows the one you pick with its resolution and
+frames per second. Press Q or Esc (or close the window) to stop.
+
+  python webcam_test.py
+"""
+import sys
 import time
 
+from check_dependencies import ensure_dependencies
 
-WINDOW_NAME = "SRS External Webcam Test"
+ensure_dependencies(models=False, window=False)   # only OpenCV is needed here
 
+from cameras import cv2, list_cameras, open_camera  # noqa: E402
 
-def scan_cameras(max_indexes=10):
-    """Find available cameras."""
-
-    cameras = []
-
-    print("\n========== SRS WEBCAM SCANNER ==========\n")
-
-    for index in range(max_indexes):
-        camera = cv2.VideoCapture(index, cv2.CAP_DSHOW)
-
-        if not camera.isOpened():
-            camera.release()
-            continue
-
-        time.sleep(0.5)
-
-        success, frame = camera.read()
-
-        if success and frame is not None:
-            height, width = frame.shape[:2]
-
-            print(f"Camera index: {index}")
-            print(f"Resolution: {width} x {height}")
-            print("--------------------------------")
-
-            cameras.append(index)
-
-        camera.release()
-
-    return cameras
+WINDOW = "SRS webcam test"
+GREEN, WHITE = (0, 255, 0), (255, 255, 255)
 
 
-def test_selected_camera(index):
-    """Test the selected USB webcam."""
-
-    camera = cv2.VideoCapture(index, cv2.CAP_DSHOW)
-
-    if not camera.isOpened():
-        print("ERROR: Could not open selected camera.")
+def show_camera(index):
+    """Show camera `index` live until Q / Esc or the window is closed."""
+    cam = open_camera(index)
+    if not cam.isOpened():
+        print(f"Camera #{index} could not be opened.")
         return
-
-    print(f"\nTesting camera index: {index}")
-    print("Press Q or ESC to close.")
-    print("You can also press Ctrl+C in PowerShell.\n")
-
-    frame_count = 0
-    start_time = time.time()
-    fps = 0.0
-
+    print(f"Showing camera #{index}. Press Q or Esc to stop.")
+    cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
+    frames, since, fps = 0, time.time(), 0.0
     try:
-        cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
-
         while True:
-
-            success, frame = camera.read()
-
-            if not success:
-                print("ERROR: Unable to read camera frame.")
+            ok, frame = cam.read()
+            if not ok:
+                print("The camera stopped sending pictures.")
                 break
-
-            height, width = frame.shape[:2]
-
-            frame_count += 1
-            elapsed = time.time() - start_time
-
-            if elapsed >= 1:
-                fps = frame_count / elapsed
-                frame_count = 0
-                start_time = time.time()
-
-            cv2.putText(
-                frame,
-                f"Camera index: {index}",
-                (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 255, 0),
-                2
-            )
-
-            cv2.putText(
-                frame,
-                f"Resolution: {width} x {height}",
-                (10, 60),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 255, 0),
-                2
-            )
-
-            cv2.putText(
-                frame,
-                f"FPS: {fps:.1f}",
-                (10, 90),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 255, 0),
-                2
-            )
-
-            cv2.putText(
-                frame,
-                "Press Q or ESC to exit",
-                (10, 120),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (255, 255, 255),
-                2
-            )
-
-            cv2.imshow(WINDOW_NAME, frame)
-
-            key = cv2.waitKey(10) & 0xFF
-
-            if key in (ord("q"), ord("Q"), 27):
-                print("Closing webcam...")
+            frames += 1
+            if time.time() - since >= 1:                       # frames per second, updated every second
+                fps, frames, since = frames / (time.time() - since), 0, time.time()
+            h, w = frame.shape[:2]
+            lines = [(f"Camera #{index}", GREEN), (f"{w} x {h}", GREEN), (f"{fps:.1f} frames/s", GREEN),
+                     ("Q or Esc to stop", WHITE)]
+            for n, (text, color) in enumerate(lines):
+                cv2.putText(frame, text, (10, 30 * (n + 1)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+            cv2.imshow(WINDOW, frame)
+            if cv2.waitKey(10) & 0xFF in (ord("q"), ord("Q"), 27):
                 break
-
-            # Detect if the user closes the window using X.
-            if cv2.getWindowProperty(
-                WINDOW_NAME,
-                cv2.WND_PROP_VISIBLE
-            ) < 1:
-                print("Webcam window closed.")
+            if cv2.getWindowProperty(WINDOW, cv2.WND_PROP_VISIBLE) < 1:   # closed with the X
                 break
-
     except KeyboardInterrupt:
-        print("\nWebcam stopped by user.")
-
-    except Exception as error:
-        print(f"Webcam error: {error}")
-
+        pass
     finally:
-        camera.release()
+        cam.release()
         cv2.destroyAllWindows()
-
-        # Process pending window events.
-        for _ in range(5):
-            cv2.waitKey(1)
-
-        print("Webcam released successfully.")
+        cv2.waitKey(1)
 
 
 def main():
-
-    available = scan_cameras()
-
-    if not available:
-        print("No working cameras found.")
-        return
-
-    print("\nAvailable camera indexes:", available)
-
+    if cv2 is None:
+        sys.exit("OpenCV is not installed: pip install -r requirements.txt")
+    print("Looking for cameras...")
+    cams = list_cameras(max_index=10)
+    if not cams:
+        sys.exit("No working camera found. Plug in the webcam and try again.")
+    for i, w, h in cams:
+        print(f"  camera #{i}: {w} x {h}" + ("   (probably the built-in one)" if i == 0 and len(cams) > 1 else ""))
     try:
-        selected = int(
-            input("\nEnter your USB webcam index: ")
-        )
-
-        if selected not in available:
-            print("Invalid camera index.")
-            return
-
-        test_selected_camera(selected)
-
+        pick = int(input(f"Camera to show [{cams[-1][0]}]: ") or cams[-1][0])
     except ValueError:
-        print("Please enter a valid camera number.")
-
-    except KeyboardInterrupt:
-        print("\nProgram cancelled.")
+        sys.exit("Please type one of the camera numbers.")
+    except (KeyboardInterrupt, EOFError):
+        return
+    if pick not in [i for i, _, _ in cams]:
+        sys.exit(f"There is no camera #{pick}.")
+    show_camera(pick)
 
 
 if __name__ == "__main__":

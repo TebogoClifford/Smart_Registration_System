@@ -8,7 +8,7 @@ import ExamSittings from '@/components/ExamSittings';
 import EditBookingDialog from '@/components/EditBookingDialog';
 import { api } from '@/lib/api';
 import { useDraft } from '@/lib/drafts';
-import { localDate, parseDate, addDays, formatDay, hallColour, groupSittings } from '@/lib/exams';
+import { localDate, parseDate, addDays, formatDay, hallColour, groupSittings, examDate } from '@/lib/exams';
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -25,7 +25,7 @@ function monthGrid(month) {
 // is room for it (container query), and below it otherwise.
 export default function ExamCalendarView({ draftKey = 'cal', refreshKey = 0 }) {
   const navigate = useNavigate();
-  const today = localDate();
+  const today = examDate();
   // the month and day you were looking at (and an open Edit dialog) are kept when you come back
   const [monthKey, setMonthKey] = useDraft(`${draftKey}:month`, today);
   const month = useMemo(() => parseDate(monthKey), [monthKey]);

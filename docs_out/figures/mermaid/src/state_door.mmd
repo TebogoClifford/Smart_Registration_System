@@ -1,0 +1,33 @@
+stateDiagram-v2
+    direction TB
+    [*] --> Waiting : power on / find LCD, send HELLO
+    Waiting : Waiting
+    Waiting : entry / LCD "Step up to scan"
+    Holding : Holding
+    Holding : entry / LCD "Hold still" + bar
+    Scanning : Scanning
+    Scanning : entry / send READY, LCD "Scanning face..."
+    Leaving : Leaving
+    Leaving : entry / LCD "Next student"
+    Testing : Testing
+    Testing : LCD, buzzer and distance tests
+    state Result {
+        Granted : Granted
+        Granted : entry / "ACCESS GRANTED", two rising tones
+        Denied : Denied
+        Denied : entry / "ACCESS DENIED", one long low tone
+        Already : Already
+        Already : entry / "ALREADY INSIDE", two short beeps
+    }
+    Waiting --> Holding : distance in 25-50 cm
+    Holding --> Waiting : out of window > 200 ms
+    Holding --> Scanning : held 1 s / beep
+    Scanning --> Granted : G
+    Scanning --> Denied : D
+    Scanning --> Already : A
+    Scanning --> Waiting : student left / send AWAY
+    Scanning --> Waiting : no answer in 6 s / LCD "No answer"
+    Result --> Leaving : after 3 s
+    Leaving --> Waiting : distance > 65 cm
+    Waiting --> Testing : T command from PC
+    Testing --> Waiting : TX or after 120 s

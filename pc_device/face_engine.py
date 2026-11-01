@@ -29,6 +29,13 @@ RECOGNIZER_MODEL = MODELS / "face_recognition_sface_2021dec.onnx"
 
 # SFace's published cosine threshold is 0.363; a little higher = fewer false accepts at an exam door.
 MATCH_THRESHOLD = 0.40
+# One face belongs to one student only. A new enrolment this similar to a face already stored for another
+# student is refused. Same value as the door: any face the door could mix up with another student counts.
+DUPLICATE_THRESHOLD = MATCH_THRESHOLD
+
+
+class DuplicateFaceError(ValueError):
+    """Raised by FaceStore.add when the face is already stored for another student."""
 
 
 class FaceEngine:
@@ -57,6 +64,34 @@ class FaceEngine:
         feat = self.recognizer.feature(aligned).flatten().astype(np.float32)
         return feat / (np.linalg.norm(feat) + 1e-9)
 
+    def aligned_face(self, frame, face=None):
+        """The 112x112 face picture SFace turns into the embedding (what the numbers 'see').
+        Without `face`, the biggest face in `frame` is used; None when there is no face."""
+        if frame is None:
+            return None
+        if face is None:
+            faces = self.detect(frame)
+            if not faces:
+                return None
+            face = faces[0]
+        return self.recognizer.alignCrop(frame, face)
+
+
+def average_embedding(embeddings):
+    """Mean of several embeddings, normalised to length 1 (one enrolment = one averaged embedding)."""
+    mean = np.mean(np.stack(embeddings), axis=0)
+    return mean / (np.linalg.norm(mean) + 1e-9)
+
+
+def embedding_strip(embedding, width=224, height=18):
+    """The 128 embedding numbers as a colour strip (blue = low, red = high), for comparing by eye:
+    two embeddings of the same face give strips with the same pattern."""
+    e = np.asarray(embedding, dtype=np.float32)
+    span = float(np.abs(e).max()) or 1.0
+    row = np.clip((e / span + 1) * 127.5, 0, 255).astype(np.uint8).reshape(1, -1)   # -max..max -> 0..255
+    strip = cv2.applyColorMap(row, cv2.COLORMAP_JET)                                # 1 x 128 colour cells
+    return cv2.resize(strip, (width, height), interpolation=cv2.INTER_NEAREST)
+
 
 def _file_name(student_number):
     """A student number as a safe file name (letters, digits, - and _ only)."""
@@ -79,6 +114,7 @@ class FaceStore:
         self.photos.mkdir(parents=True, exist_ok=True)
         self.embeddings.mkdir(parents=True, exist_ok=True)
         self.people = {}  # studentId -> {"studentNumber", "name", "embedding"}
+        self.last_ambiguous = None  # set by best_match when a face matches two students
         self._migrate_old(data / "faces")
         self._load()
 
@@ -107,33 +143,65 @@ class FaceStore:
                 npy.unlink()
         index_file.unlink()
 
-    def _write_embedding(self, student_id, student_number, name, embedding, samples):
+    def _write_embedding(self, student_id, student_number, name, embedding, samples, duplicate_check=None):
         rec = {
             "studentId": int(student_id), "studentNumber": str(student_number), "name": name,
             "model": "SFace (OpenCV Zoo, face_recognition_sface_2021dec)", "samples": samples,
             "enrolledAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-            "embedding": [round(float(v), 6) for v in embedding],
         }
-        _write_atomic(self.embeddings / f"{_file_name(student_number)}.json", json.dumps(rec, indent=2).encode("utf-8"))
+        if duplicate_check is not None:
+            rec["duplicateCheck"] = duplicate_check   # what the duplicate check found and who decided
+        rec["embedding"] = [round(float(v), 6) for v in embedding]
+        _write_atomic(self.embedding_path(student_number), json.dumps(rec, indent=2).encode("utf-8"))
 
     def photo_path(self, student_number):
         return self.photos / f"{_file_name(student_number)}.jpg"
 
-    def add(self, student_id, student_number, name, embeddings, photo_jpg=None):
-        """Save a new enrolment: the averaged embedding (JSON) and, if given, the photo (JPEG bytes)."""
-        mean = np.mean(np.stack(embeddings), axis=0)
-        mean = mean / (np.linalg.norm(mean) + 1e-9)
+    def embedding_path(self, student_number):
+        return self.embeddings / f"{_file_name(student_number)}.json"
+
+    def find_duplicates(self, embedding, exclude_id=None, threshold=DUPLICATE_THRESHOLD, limit=3):
+        """Students already stored whose face is this similar to `embedding`, most similar first:
+        [(studentId, similarity)]. `exclude_id` = the student being enrolled (re-enrolling is fine).
+        Also returns the closest face overall, (studentId, similarity) or None, for the log."""
+        scores = sorted(((float(np.dot(embedding, p["embedding"])), sid) for sid, p in self.people.items()
+                         if exclude_id is None or sid != int(exclude_id)), reverse=True)
+        closest = (scores[0][1], scores[0][0]) if scores else None
+        return [(sid, sim) for sim, sid in scores[:limit] if sim >= threshold], closest
+
+    def duplicate_pairs(self, threshold=DUPLICATE_THRESHOLD):
+        """Every pair of stored students whose faces look alike: [(studentId, studentId, similarity)]."""
+        ids = sorted(self.people)
+        pairs = [(a, b, float(np.dot(self.people[a]["embedding"], self.people[b]["embedding"])))
+                 for i, a in enumerate(ids) for b in ids[i + 1:]]
+        return sorted((p for p in pairs if p[2] >= threshold), key=lambda p: -p[2])
+
+    def add(self, student_id, student_number, name, embeddings, photo_jpg=None, duplicate_check=None):
+        """Save a new enrolment: the averaged embedding (JSON) and, if given, the photo (JPEG bytes).
+        Refuses (DuplicateFaceError) a face that is already stored for another student, and a student
+        number whose file belongs to another student, so one embedding is only ever linked to one student."""
+        mean = average_embedding(embeddings)
+        matches, _ = self.find_duplicates(mean, exclude_id=student_id)
+        if matches:
+            sid, sim = matches[0]
+            other = self.people[sid]
+            raise DuplicateFaceError(f"face already enrolled for {other['studentNumber']} {other['name']} (similarity {sim:.2f})")
+        owner = next((sid for sid, p in self.people.items()
+                      if p["studentNumber"] == str(student_number) and sid != int(student_id)), None)
+        if owner is not None:
+            raise ValueError(f"student number {student_number} is already stored for another student (id {owner})")
         # the same student enrolled again under a changed number: drop the old files first
         old = self.people.get(int(student_id))
         if old and old["studentNumber"] != str(student_number):
             self._delete_files(old["studentNumber"])
-        self._write_embedding(student_id, student_number, name, mean, samples=len(embeddings))
+        self._write_embedding(student_id, student_number, name, mean, samples=len(embeddings),
+                              duplicate_check=duplicate_check)
         if photo_jpg:
             _write_atomic(self.photo_path(student_number), photo_jpg)
         self.people[int(student_id)] = {"studentNumber": str(student_number), "name": name, "embedding": mean}
 
     def _delete_files(self, student_number):
-        (self.embeddings / f"{_file_name(student_number)}.json").unlink(missing_ok=True)
+        self.embedding_path(student_number).unlink(missing_ok=True)
         self.photo_path(student_number).unlink(missing_ok=True)
 
     def keep_only(self, student_ids):
@@ -145,12 +213,15 @@ class FaceStore:
         return len(gone)
 
     def best_match(self, embedding, allowed_ids=None):
-        """(studentId, similarity) of the closest enrolled face, or (None, best similarity) below the threshold."""
-        best_id, best = None, -1.0
-        for sid, p in self.people.items():
-            if allowed_ids is not None and sid not in allowed_ids:
-                continue
-            sim = float(np.dot(embedding, p["embedding"]))
-            if sim > best:
-                best_id, best = sid, sim
-        return (best_id, best) if best >= MATCH_THRESHOLD else (None, best)
+        """(studentId, similarity) of the closest enrolled face, or (None, best similarity) below the threshold.
+        A face that also matches a SECOND student is ambiguous: (None, best), and self.last_ambiguous holds
+        the two student ids, so one face is never accepted as either of two people."""
+        scores = sorted(((float(np.dot(embedding, p["embedding"])), sid) for sid, p in self.people.items()
+                         if allowed_ids is None or sid in allowed_ids), reverse=True)
+        self.last_ambiguous = None
+        if not scores or scores[0][0] < MATCH_THRESHOLD:
+            return None, (scores[0][0] if scores else -1.0)
+        if len(scores) > 1 and scores[1][0] >= MATCH_THRESHOLD:
+            self.last_ambiguous = (scores[0][1], scores[1][1])
+            return None, scores[0][0]
+        return scores[0][1], scores[0][0]

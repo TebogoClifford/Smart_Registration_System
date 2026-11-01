@@ -1,0 +1,72 @@
+# ci.yml — runs on every push and pull request: all backend tests against a fresh PostgreSQL,
+# and the web app's lint and build. On Render, set Auto-Deploy to "After CI checks pass" so a
+# commit that breaks the tests is never deployed.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Backend
+    services:
+      postgres:                       # a throwaway database just for this run
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: pg
+          POSTGRES_DB: srs_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:pg@localhost:5432/srs_test   # needed by prisma generate too
+      PGSSL: disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: Backend/.node-version
+          cache: npm
+          cache-dependency-path: Backend/package-lock.json
+      - run: npm ci                   # exact versions from package-lock.json; also runs prisma generate
+      - run: npm run lint
+      - name: Create the second database (for the sign-in tests) and apply migrations to both
+        run: |
+          PGPASSWORD=pg psql -h localhost -U postgres -c "CREATE DATABASE srs_auth"
+          node prisma/deploy.js
+          DATABASE_URL=postgresql://postgres:pg@localhost:5432/srs_auth node prisma/deploy.js
+      - name: Start an open test server (port 3111) and one with sign-in on (port 3112)
+        run: |
+          AUTH_DISABLED=true PORT=3111 nohup node src/server.js > open.log 2>&1 &
+          DATABASE_URL=postgresql://postgres:pg@localhost:5432/srs_auth JWT_SECRET=ci-only-secret-0123456789abcdef0123 \
+            ADMIN_EMAIL=admin@test.local ADMIN_PASSWORD=adminpass1 PORT=3112 nohup node src/server.js > auth.log 2>&1 &
+          for port in 3111 3112; do
+            for i in $(seq 1 30); do curl -sf localhost:$port/health && break; sleep 1; done
+          done
+      - name: API, booking, extra and sign-out tests
+        run: BASE_URL=http://localhost:3111 node --test --test-concurrency=1 test/api.test.js test/booking.test.js test/extra.test.js test/signout.test.js
+      - name: Sign-in and roles tests
+        run: AUTH_BASE_URL=http://localhost:3112 node --test test/auth.test.js
+      - name: Server logs (only shown when something failed)
+        if: failure()
+        run: tail -n 100 open.log auth.log
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web_app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web_app/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build

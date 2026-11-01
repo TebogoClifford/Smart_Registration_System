@@ -10,7 +10,15 @@ const STUDENT_SELECT = {
   id: true, student_number: true, name: true, email: true, device_id: true, enrollment_status: true, enrollment_requested_at: true, course_name: true,
   student_modules: { select: { modules: { select: { id: true, code: true, name: true } } }, orderBy: { modules: { code: 'asc' } } },
 };
-const shape = ({ student_modules: sm, ...s }, withImage) => ({ ...s, has_image: withImage.has(s.id), modules: sm.map((x) => x.modules) });
+// A capture request nobody collected within ENROLL_REQUEST_TTL_SECONDS (default 10 min) is dropped by the
+// device API (see pending-enrollments in routes/devices.js). enrollment_expired tells the web console,
+// so such a student shows "request expired" instead of waiting forever.
+const requestTtlMs = () => (parseInt(process.env.ENROLL_REQUEST_TTL_SECONDS, 10) > 0 ? parseInt(process.env.ENROLL_REQUEST_TTL_SECONDS, 10) : 600) * 1000;
+const isExpired = (s) => s.enrollment_status === 'pending'
+  && (!s.enrollment_requested_at || Date.now() - new Date(s.enrollment_requested_at).getTime() > requestTtlMs());
+const shape = ({ student_modules: sm, ...s }, withImage) => ({
+  ...s, has_image: withImage.has(s.id), modules: sm.map((x) => x.modules), enrollment_expired: isExpired(s),
+});
 // ids (of `ids`, or of everyone) that have an enrolment photo, without loading the photos
 const idsWithImage = async (ids) => new Set((await prisma.students.findMany({
   where: { enrollment_image: { not: null }, ...(ids && { id: { in: ids } }) }, select: { id: true },
@@ -31,7 +39,7 @@ const badEmail = (e) => !EMAIL_RE.test(e) || e.length > 255;
 
 router.param('id', validateIdParam);
 
-// POST /api/students — start enrollment (status defaults to 'pending')
+// POST /api/students — start enrolment (status defaults to 'pending')
 router.post('/', async (req, res) => {
   const { student_number, name, device_id } = (req.body ?? {});
   const course_name = checkCourse(req.body?.course_name);
@@ -99,7 +107,7 @@ router.put('/:id', async (req, res) => {
   if (badEmail(email)) return res.status(400).json({ error: BAD_EMAIL });
   try {
     // a course saved before the list existed may stay as it is
-    const current = await prisma.students.findUnique({ where: { id: Number(id) }, select: { course_name: true } });
+    const current = await prisma.students.findUnique({ where: { id: Number(id) }, select: { course_name: true, device_id: true } });
     const course_name = checkCourse(req.body?.course_name, current?.course_name);
     if (course_name === undefined) return res.status(400).json({ error: BAD_COURSE });
     const dup = await prisma.students.findFirst({
@@ -108,9 +116,15 @@ router.put('/:id', async (req, res) => {
     if (dup) {
       return res.status(409).json({ error: 'this student number is already registered on that device' });
     }
+    // The face lives on the device, so a student moved to another device is not enrolled there yet:
+    // set them back to pending, which asks the new device to capture them (the old one drops its copy).
+    const moved = current && current.device_id !== Number(device_id);
     const { count } = await prisma.students.updateMany({
       where: { id: Number(id) },
-      data: { student_number: String(student_number), name: String(name), email, device_id: Number(device_id), course_name },
+      data: {
+        student_number: String(student_number), name: String(name), email, device_id: Number(device_id), course_name,
+        ...(moved && { enrollment_status: 'pending', enrollment_requested_at: new Date() }),
+      },
     });
     if (count === 0) return res.status(404).json({ error: 'student not found' });
     res.json(await getStudent(id));
@@ -134,8 +148,8 @@ router.post('/:id/re-enroll', async (req, res) => {
   }
 });
 
-// PUT /api/students/:id/enrollment — the device reports the outcome of an enrollment capture
-// (design: Student Enrollment, step 7-8). Needs the device's key in X-Device-Key.
+// PUT /api/students/:id/enrollment — the device reports the outcome of an enrolment capture
+// (design: Student Enrolment, step 7-8). Needs the device's key in X-Device-Key.
 router.put('/:id/enrollment', async (req, res) => {
   const { status } = (req.body ?? {});
   if (!['enrolled', 'failed'].includes(status)) {

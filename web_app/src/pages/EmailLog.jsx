@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { api } from '@/lib/api';
 import { useDraft } from '@/lib/drafts';
+import { examTime } from '@/lib/exams';
 
 const REFRESH_MS = 10000;
 const KIND = { booked: 'Exam booked', moved: 'Exam moved', cancelled: 'Exam cancelled' };
@@ -90,7 +91,7 @@ export default function EmailLog() {
                       {data.emails.map((e) => (
                         <Fragment key={e.id}>
                           <TableRow className="cursor-pointer" onClick={() => setOpen(open === e.id ? null : e.id)} aria-expanded={open === e.id}>
-                            <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{new Date(e.created_at).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</TableCell>
+                            <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{examTime(e.created_at)}</TableCell>
                             <TableCell><span className="font-medium">{e.to_name}</span><span className="block text-xs text-muted-foreground">{e.to_email || 'no email address'}</span></TableCell>
                             <TableCell className="max-w-md"><span className="text-xs text-muted-foreground">{KIND[e.kind] ?? e.kind}</span><span className="block truncate text-sm">{e.subject}</span></TableCell>
                             <TableCell>
@@ -101,7 +102,7 @@ export default function EmailLog() {
                           {open === e.id && (
                             <TableRow>
                               <TableCell colSpan={4} className="bg-muted/30">
-                                <p className="mb-1 text-xs text-muted-foreground">To {e.to_name} &lt;{e.to_email}&gt;{e.sent_at ? ` · sent ${new Date(e.sent_at).toLocaleString()}` : ''}{e.error ? ` · ${e.error}` : ''}</p>
+                                <p className="mb-1 text-xs text-muted-foreground">To {e.to_name} &lt;{e.to_email}&gt;{e.sent_at ? ` · sent ${examTime(e.sent_at)}` : ''}{e.error ? ` · ${e.error}` : ''}</p>
                                 <p className="mb-2 text-sm font-semibold">{e.subject}</p>
                                 <pre className="whitespace-pre-wrap font-sans text-sm">{e.body_text}</pre>
                               </TableCell>

@@ -1,10 +1,14 @@
 """srs_pc_app.py - the Smart Registration System door program for a PC with a USB webcam.
 
 It plays the ESP32-CAM's part (see Backend/DEVICE_API.md):
-  * ENROL  - when an invigilator presses "Start enrollment" on the web console, this program sees
+  * ENROL  - when an invigilator presses "Start enrolment" on the web console, this program sees
              the student in pending-enrollments, captures their face automatically, saves
              data/photos/<student number>.jpg and data/embeddings/<student number>.json on this PC,
              and reports "enrolled" (or "failed") and the photo back to the console.
+             ONE FACE, ONE STUDENT - before saving, the new face is compared with every face already
+             stored on this PC. If it matches another student's face, the enrolment is rejected
+             (reported as failed) and a window shows both faces and their embeddings side by side, so
+             the operator can see why. At the door, a face that matches two students is not accepted.
   * RECOGNISE - off at start; the "Start recognition" button turns it on. Any enrolled student
              whose face matches is RECOGNISED (granted; their seat is shown if they have one in this
              session), an unknown face is DENIED. Every decision is sent to the backend and appears
@@ -21,48 +25,83 @@ seat list, enrolment progress, activity log) beside it. Pick the camera from the
 video; the choice is saved in config.ini.
 
 Run:
-  pip install -r requirements.txt
-  python download_models.py                       (once)
   python srs_pc_app.py                            (settings from config.ini)
   python srs_pc_app.py --check                    (test the connection only, no camera)
+  python srs_pc_app.py --no-install               (do not install missing dependencies at start-up)
+
+At start-up check_dependencies.py installs whatever is missing (the packages in requirements.txt
+and the two face models). Anything it cannot install only switches its own feature off: without
+OpenCV there is no camera, without requests the decisions wait in the offline queue, without
+pyserial there is no Arduino and without Tkinter the program runs in the console.
 
 Settings can also come from the command line or the environment variables BASE_URL, DEVICE_ID,
 DEVICE_KEY, CAMERA_INDEX, SERIAL_PORT.
 """
-import argparse
-import configparser
-import json
-import os
-import queue
-import re
 import sys
-import threading
-import time
-import tkinter as tk
-from datetime import datetime
-from collections import deque
 from pathlib import Path
-from tkinter import ttk
 
-import cv2
+# 1. dependencies first: this installs missing packages, so it must run before they are imported
+from check_dependencies import ensure_dependencies
 
-# hide OpenCV's harmless warnings (empty camera slots while scanning, dnn engine notes)
+SETUP_PROBLEMS = ensure_dependencies(install_missing="--no-install" not in sys.argv[1:])
+
+import argparse  # noqa: E402
+import configparser  # noqa: E402
+import json  # noqa: E402
+import os  # noqa: E402
+import queue  # noqa: E402
+import re  # noqa: E402
+import shutil  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
+from collections import deque  # noqa: E402
+from datetime import datetime  # noqa: E402
+
+# 2. the window (Tkinter): without it the door runs in the console (run_console)
 try:
-    cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
-except AttributeError:
-    pass
+    import tkinter as tk
+    from tkinter import ttk
+except ImportError:
+    tk = ttk = None
+
+# 3. camera and face recognition (OpenCV, NumPy, face_engine): without them the camera is off
+try:
+    import cv2
+    import numpy as np
+    from face_engine import (DUPLICATE_THRESHOLD, DuplicateFaceError, FaceEngine, FaceStore,
+                             average_embedding, embedding_strip)
+    cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)  # hide harmless camera-scan warnings
+    VISION_PROBLEM = ""
+except (ImportError, AttributeError) as _err:
+    cv2 = np = FaceEngine = None
+    DUPLICATE_THRESHOLD = 0.40
+    VISION_PROBLEM = f"camera and face recognition are off: {_err} (pip install -r requirements.txt)"
+
+    class FaceStore:
+        """Stands in for face_engine.FaceStore without NumPy: no faces stored, nothing to clean up."""
+
+        def __init__(self, _data_folder):
+            self.people = {}
+
+        def keep_only(self, _student_ids):
+            return 0
+
+        def duplicate_pairs(self):
+            return []
 
 FROZEN = getattr(sys, "frozen", False)  # running as the one-file "SRS Door.exe" (build_exe.bat)
 HERE = Path(sys.executable).parent if FROZEN else Path(__file__).resolve().parent  # config.ini and data/ live here
 BUNDLE = Path(sys._MEIPASS) if FROZEN else HERE  # files packed inside the .exe (models, config.example.ini)
 sys.path.insert(0, str(HERE.parent / "device_client"))
-from srs_client import SrsClient, SrsError  # noqa: E402
-from arduino_link import MAX_CM, MIN_CM, ArduinoLink, available_ports, guess_arduino_port  # noqa: E402
-from face_engine import FaceEngine, FaceStore  # noqa: E402
+from srs_client import SrsClient, SrsError  # noqa: E402  (works without requests: stays OFFLINE)
+from cameras import auto_camera, list_cameras, open_camera  # noqa: E402
+from arduino_link import (MAX_CM, MIN_CM, TEST_STEPS, ArduinoLink, available_ports,  # noqa: E402
+                          guess_arduino_port)
 
 DATA = HERE / "data"
 QUEUE_FILE = DATA / "event_queue.json"
 CONFIG_FILE = HERE / "config.ini"
+CONFIG_EXAMPLE = BUNDLE / "config.example.ini"  # packed inside the .exe when frozen
 
 ENROL_SAMPLES = 5            # embeddings averaged per enrolment
 ENROL_SAMPLE_GAP = 0.25      # seconds between samples
@@ -99,9 +138,9 @@ def fail(message):
 
 # ---------------------------------------------------------------- settings
 def load_settings():
-    example = BUNDLE / "config.example.ini"
-    if FROZEN and not CONFIG_FILE.exists() and example.exists():  # first start on a new PC: write config.ini beside the .exe
-        CONFIG_FILE.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
+    if not CONFIG_FILE.exists() and CONFIG_EXAMPLE.exists():
+        shutil.copyfile(CONFIG_EXAMPLE, CONFIG_FILE)   # first start: a config.ini to fill in
+        print(f"created {CONFIG_FILE.name} from {CONFIG_EXAMPLE.name}: fill in device_id and device_key")
     ini = configparser.ConfigParser()
     ini.read(CONFIG_FILE, encoding="utf-8")
     cfg = ini["srs"] if ini.has_section("srs") else {}
@@ -122,9 +161,11 @@ def load_settings():
                    default=str(pick("ignore_sensor", "IGNORE_SENSOR", "no")).lower() in ("yes", "true", "1", "on"),
                    help="scan without the distance sensor: any face size, only recognised faces get an answer")
     p.add_argument("--check", action="store_true", help="test the backend connection and exit (no camera)")
+    p.add_argument("--no-install", action="store_true",
+                   help="do not install missing dependencies at start-up (they are still checked)")
     a = p.parse_args()
     if not a.device_id or not a.key:
-        fail(f"Set device_id and device_key in {CONFIG_FILE}\n"
+        fail(f"Set device_id and device_key in {CONFIG_FILE} (or --device-id and --key)\n"
              "(an administrator copies the key from the device page in the web console), then start again.")
     return a
 
@@ -138,10 +179,6 @@ def save_setting(name, value):
     pattern = rf"(?m)^{re.escape(name)}\s*=.*$"
     text = re.sub(pattern, line, text) if re.search(pattern, text) else text.rstrip() + f"\n{line}\n"
     CONFIG_FILE.write_text(text, encoding="utf-8")
-
-
-def save_camera_choice(index):
-    save_setting("camera", index)
 
 
 # ---------------------------------------------------------------- network worker
@@ -287,33 +324,7 @@ class Backend(threading.Thread):
             self.stop.wait(1)
 
 
-# ---------------------------------------------------------------- cameras
-def _open(index):
-    return cv2.VideoCapture(index, cv2.CAP_DSHOW) if os.name == "nt" else cv2.VideoCapture(index)
-
-
-def list_cameras(max_index=6, skip=None):
-    """[(index, width, height)] of the cameras that deliver a frame. `skip` = an index already open."""
-    found = []
-    for i in range(max_index):
-        if i == skip:
-            found.append((i, None, None))
-            continue
-        cam = _open(i)
-        if cam.isOpened():
-            ok, frame = cam.read()
-            if ok and frame is not None:
-                found.append((i, frame.shape[1], frame.shape[0]))
-        cam.release()
-    return found
-
-
-def auto_camera(cameras):
-    """Built-in laptop cameras are normally index 0 and a plugged-in USB webcam comes after it,
-    so 'auto' takes the highest working index."""
-    return cameras[-1][0] if cameras else None
-
-
+# ---------------------------------------------------------------- exam session times
 def session_over(session):
     """True once the exam session has ended (12:00 / 16:00): everyone is signed out then."""
     if session.get("ended"):
@@ -335,7 +346,7 @@ def session_key(session):
     return time.strftime("%Y-%m-%d"), ("09:00" if time.localtime().tm_hour < 12 else "13:00")
 
 
-GREEN, RED, AMBER, WHITE = (60, 200, 60), (40, 40, 230), (0, 190, 255), (255, 255, 255)
+AMBER, WHITE = (0, 190, 255), (255, 255, 255)   # face box colours (BGR): too far away / close enough
 
 
 # ---------------------------------------------------------------- camera + face worker
@@ -349,7 +360,14 @@ class DoorEngine(threading.Thread):
         self.backend = backend
         self.store = store
         self.client = client
-        self.engine = FaceEngine()
+        self.engine, self.problem = None, VISION_PROBLEM   # problem = why faces cannot be handled ("" = fine)
+        if FaceEngine is not None:
+            try:
+                self.engine = FaceEngine()
+            except Exception as err:  # models missing or broken: the camera still shows, faces are off
+                self.problem = f"face recognition is off: {err}"
+        if self.problem:
+            log(self.problem)
         self.link = link               # the Arduino door unit (arduino_link.py); optional
         self.fps = 0.0                 # camera frames per second (live value for the window)
         self.face_px = None            # width of the biggest face in the picture, in pixels
@@ -369,6 +387,7 @@ class DoorEngine(threading.Thread):
         self.face_seen_at = 0.0
         self.skip_requested = False
         self.photo_requested = False   # the window's Take photo button (enrolment without the size check)
+        self.last_duplicate = None     # the last enrolment rejected as a duplicate (shown in the comparison window)
         self.recognising = False       # the window's Start/Stop recognition button
         self.ignore_sensor = bool(args.ignore_sensor)  # the window's "Scan without distance sensor" switch
         self.admin_mode = False        # the window's Admin mode switch: recognised students in at any time (never saved)
@@ -424,26 +443,79 @@ class DoorEngine(threading.Thread):
                         fps=self.fps, face_px=self.face_px,
                         camera_error=self.camera_error, enrolling=enrol,
                         result=self.result if self.result and time.time() < self.result[2] else None,
-                        faces_stored=len(self.store.people), history=list(self.history))
+                        faces_stored=len(self.store.people), history=list(self.history),
+                        last_duplicate=self.last_duplicate, problem=self.problem)
 
     # -- enrolment
-    def _finish_enrolment(self, ok):
+    def _finish_enrolment(self, ok, why=None):
+        """Save (ok) or drop the enrolment and tell the backend. `why` = text for the banner and the log."""
         st = self.enrolling["student"]
         sid = st["studentId"]
+        check = self.enrolling.get("check")
         if ok:
             # two files on this PC: data/photos/<number>.jpg and data/embeddings/<number>.json
             okj, jpg = cv2.imencode(".jpg", self.enrolling["frame"], [cv2.IMWRITE_JPEG_QUALITY, 85])
             photo = jpg.tobytes() if okj else None
-            self.store.add(sid, st["studentNumber"], st["name"], self.enrolling["samples"], photo_jpg=photo)
-            log(f"saved {self.store.photo_path(st['studentNumber']).name} and the embedding for {st['studentNumber']}")
-            if photo and len(photo) < 1_000_000:
+            try:
+                self.store.add(sid, st["studentNumber"], st["name"], self.enrolling["samples"], photo_jpg=photo,
+                               duplicate_check=check)
+            except (DuplicateFaceError, ValueError) as err:     # one face, one student: never stored twice
+                ok, why, photo = False, str(err), None
+            else:
+                log(f"saved {self.store.photo_path(st['studentNumber']).name} and the embedding for {st['studentNumber']}")
+            if ok and photo and len(photo) < 1_000_000:
                 self.backend.tasks.put(lambda: self.client.upload_enrollment_image(sid, photo))
         self.backend.report_enrollment(sid, ok)
         self.handled.add(sid)
-        self.result = ("granted" if ok else "denied", f"{'Enrolled' if ok else 'Enrolment failed'}: {st['name']}",
+        title = "Enrolled" if ok else "Enrolment failed"
+        self.result = ("granted" if ok else "denied", f"{title}: {st['name']}" + (f"\n{why}" if why else ""),
                        time.time() + SHOW_RESULT_SECONDS)
-        log(("enrolled" if ok else "enrolment FAILED for"), st["studentNumber"], st["name"])
+        log(("enrolled" if ok else "enrolment FAILED for"), st["studentNumber"], st["name"], f"({why})" if why else "")
         self.enrolling = None
+
+    def _check_duplicates(self):
+        """All samples taken: compare the new face with every face stored on this PC before saving.
+        No match -> enrol now. A match with another student -> rejected (one face belongs to one student only);
+        the comparison window shows both faces so the operator can see why."""
+        e = self.enrolling
+        st = e["student"]
+        mean = average_embedding(e["samples"])
+        matches, closest = self.store.find_duplicates(mean, exclude_id=st["studentId"])
+        compared = sum(1 for sid in self.store.people if sid != st["studentId"])
+        # kept in the new embedding file, so it can be checked later what was compared and decided
+        e["check"] = {
+            "checkedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "facesCompared": compared,
+            "threshold": DUPLICATE_THRESHOLD,
+            "closest": ({"studentNumber": self.store.people[closest[0]]["studentNumber"],
+                         "name": self.store.people[closest[0]]["name"], "similarity": round(closest[1], 3)}
+                        if closest else None),
+            "possibleDuplicates": [{"studentNumber": self.store.people[sid]["studentNumber"],
+                                    "name": self.store.people[sid]["name"], "similarity": round(sim, 3)}
+                                   for sid, sim in matches],
+            "decision": "no duplicate found",
+        }
+        near = f"closest {e['check']['closest']['name']} {closest[1]:.2f}" if closest else "no other faces stored"
+        if not matches:
+            log(f"duplicate check {st['studentNumber']}: compared with {compared} face(s), no match ({near})")
+            return self._finish_enrolment(True, f"no duplicate among {compared} stored face(s)")
+        # pictures for the comparison window: the face each embedding was made from + the embedding strip
+        new_face = self.engine.aligned_face(e["frame"], e["face"])
+        others = []
+        for sid, sim in matches:
+            p = self.store.people[sid]
+            photo_file = self.store.photo_path(p["studentNumber"])
+            photo = cv2.imdecode(np.fromfile(str(photo_file), np.uint8), cv2.IMREAD_COLOR) if photo_file.exists() else None
+            others.append(dict(studentId=sid, name=p["name"], number=p["studentNumber"], similarity=sim,
+                               face=self.engine.aligned_face(photo), strip=embedding_strip(p["embedding"]),
+                               photo_file=photo_file.name if photo_file.exists() else None,
+                               embedding_file=self.store.embedding_path(p["studentNumber"]).name))
+        first = others[0]
+        e["check"]["decision"] = f"rejected: face already enrolled for {first['number']} {first['name']}"
+        self.last_duplicate = dict(id=time.time(), name=st["name"], number=st["studentNumber"], face=new_face,
+                                   strip=embedding_strip(mean), compared=compared, matches=others)
+        log(f"DUPLICATE FACE {st['studentNumber']} {st['name']}: already enrolled as "
+            + ", ".join(f"{m['number']} {m['name']} ({m['similarity']:.2f})" for m in others) + " - enrolment rejected")
+        return self._finish_enrolment(False, f"face already enrolled for {first['number']} {first['name']}")
 
     def _step_enrolment(self, frame, faces):
         e = self.enrolling
@@ -465,8 +537,9 @@ class DoorEngine(threading.Thread):
             e["samples"].append(self.engine.embed(frame, face))
             e["last"] = time.time()
             e["frame"] = frame.copy()
+            e["face"] = face.copy()       # where the face is in e["frame"] (for the comparison picture)
             if len(e["samples"]) >= ENROL_SAMPLES:
-                self._finish_enrolment(True)
+                self._check_duplicates()
 
     # -- Arduino distance gate
     def _gate_open(self):
@@ -492,6 +565,8 @@ class DoorEngine(threading.Thread):
         # "closest" to a seated student just because the real match was left out of the search
         sid, sim = self.store.best_match(self.engine.embed(frame, face))
         person = self.store.people.get(sid) if sid is not None else None
+        # one face, one student: a face that matches two enrolled students is not accepted as either
+        ambiguous = self.store.last_ambiguous
         # a student is let in once per exam session: who is in = let in here + what the server reports
         let_in = self.let_in.setdefault(session_key(session), set())
         # after the session ends (12:00 / 16:00) everyone is signed out and not let in again until the next
@@ -500,7 +575,7 @@ class DoorEngine(threading.Thread):
         ended = sid is not None and not admin and (session_over(session) or sid in session.get("sessionEndedFor", []))
         inside = sid is not None and not ended and not admin and (sid in let_in or sid in session.get("alreadyInside", []))
         label = ((f"{person['name']} · session ended" if ended else f"{person['name']} · already inside" if inside else person["name"])
-                 if person else "not recognised")
+                 if person else "matches 2 students" if ambiguous else "not recognised")
         if self.ignore_sensor and sid is None:
             # without the distance check anyone passing by is in view: only a positive match gets an answer
             self.streak = (None, 0)
@@ -533,6 +608,9 @@ class DoorEngine(threading.Thread):
             where = f"seat {seat['seatNumber']} · {seat['moduleCode']}" if seat else "no exam seat in this session"
             decision, text = "granted", f"{'LET IN (ADMIN)' if admin else 'RECOGNISED'}  {person['name']}\n{person['studentNumber']} · {where}"
             let_in.add(sid)
+        elif ambiguous:
+            a, b = (self.store.people[x] for x in ambiguous)
+            decision, text = "denied", f"NOT RECOGNISED\nface matches {a['studentNumber']} and {b['studentNumber']}: check the card"
         else:
             decision, text = "denied", "NOT RECOGNISED\nface is not enrolled"
         if sid is not None:
@@ -541,7 +619,9 @@ class DoorEngine(threading.Thread):
         if self.link.connected:
             self.link.send({"granted": "G", "already": "A"}.get(decision, "D"))
         self.result = (decision, text, now + SHOW_RESULT_SECONDS)
-        who = f"{person['studentNumber']} {person['name']}" if person else "unknown face"
+        who = (f"{person['studentNumber']} {person['name']}" if person
+               else "face matching " + " and ".join(self.store.people[x]["studentNumber"] for x in ambiguous) if ambiguous
+               else "unknown face")
         self.history.appendleft((time.strftime("%H:%M:%S"), decision, who))
         log(decision.upper() + (" (admin)" if admin else ""), who, f"similarity {sim:.2f}")
         return label
@@ -549,7 +629,7 @@ class DoorEngine(threading.Thread):
     def _switch(self, cam, index):
         if cam is not None:
             cam.release()
-        new = _open(index)
+        new = open_camera(index)
         ok = new.isOpened() and new.read()[0]
         with self.lock:
             if ok:
@@ -564,6 +644,11 @@ class DoorEngine(threading.Thread):
         return None
 
     def run(self):
+        if cv2 is None:   # without OpenCV there is no camera; the rest of the program carries on
+            with self.lock:
+                self.camera_error = self.problem
+            self.stop.wait()
+            return
         cams = self.rescan()
         choice = self.args.camera
         start = auto_camera(cams) if str(choice).lower() == "auto" else int(choice)
@@ -590,7 +675,7 @@ class DoorEngine(threading.Thread):
             if last_frame:
                 self.fps = 0.9 * self.fps + 0.1 / max(1e-3, now - last_frame)  # smoothed frames per second
             last_frame = now
-            faces = self.engine.detect(frame)
+            faces = self.engine.detect(frame) if self.engine else []
             self.face_px = int(faces[0][2]) if len(faces) else None
             snap = self.backend.snapshot()
             self.handled &= {p["studentId"] for p in snap["pending"]}  # forget once the server agrees
@@ -598,7 +683,7 @@ class DoorEngine(threading.Thread):
             label = None
             # no lock here: face maths is slow and the window must never wait for it.
             # state() only reads whole attributes, which are swapped atomically.
-            if self.enrolling is None:
+            if self.enrolling is None and self.engine:   # no models: leave enrolments for later
                 todo = [p for p in snap["pending"] if p["studentId"] not in self.handled]
                 if todo and not showing:
                     self.enrolling = {"student": todo[0], "started": time.time(), "samples": [], "last": 0, "frame": frame}
@@ -641,6 +726,85 @@ def value_grid(parent, rows):
             v.grid(row=r, column=col + 1, columnspan=3 if len(names) == 1 else 1, sticky="ew", pady=1)
             vals[key] = v
     return vals
+
+
+def bgr_to_photo(img, size=None):
+    """An OpenCV (BGR) picture as a Tk image, optionally scaled to fit size=(w, h). Tk reads PPM natively, so no Pillow."""
+    if size:
+        h, w = img.shape[:2]
+        scale = min(size[0] / w, size[1] / h)
+        if scale != 1:
+            img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_CUBIC)
+    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    h, w = rgb.shape[:2]
+    return tk.PhotoImage(width=w, height=h, data=b"P6 %d %d 255 " % (w, h) + rgb.tobytes(), format="PPM")
+
+
+FACE_BOX = (168, 168)   # size of each face in the duplicate window
+
+
+class DuplicateWindow:
+    """Pop-up shown when an enrolment was rejected because the face is already stored for another student
+    on this PC: the new face and the enrolled one(s) side by side, with their embeddings as colour strips and
+    the similarity, so the operator can see why. One face belongs to one student only, so there is no
+    "enrol anyway": if the stored face is on the wrong student, re-enrol or delete that student first."""
+
+    def __init__(self, root, review):
+        self.review_id = review["id"]
+        self._images = []               # Tk drops images that nothing references, so keep them here
+        w = self.win = tk.Toplevel(root)
+        w.title("Enrolment rejected: face already enrolled")
+        w.configure(bg=PANEL, padx=16, pady=14)
+        w.protocol("WM_DELETE_WINDOW", self.close)
+        w.attributes("-topmost", True)  # stay in front of the door window until closed
+        tk.Label(w, text="Enrolment rejected: this face is already enrolled for another student", bg=PANEL, fg=BAD_BG,
+                 font=("Segoe UI Semibold", 14)).pack(anchor="w")
+        tk.Label(w, text=f"Compared with {review['compared']} face(s) stored on this PC. One face may belong to one student "
+                         f"only, and the door treats a similarity of {DUPLICATE_THRESHOLD:.2f} or more as the same face.",
+                 bg=PANEL, fg=MUTED, font=("Segoe UI", 10), justify="left", wraplength=640).pack(anchor="w", pady=(2, 10))
+
+        cards = tk.Frame(w, bg=PANEL)
+        cards.pack(anchor="w")
+        self._card(cards, 0, "REJECTED ENROLMENT", review["name"], review["number"], review["face"], review["strip"],
+                   ["captured just now", "not saved, reported as failed"], "#2563eb")
+        for n, m in enumerate(review["matches"], start=1):
+            files = [f"photo: data/photos/{m['photo_file']}" if m["photo_file"] else "photo: missing on this PC",
+                     f"embedding: data/embeddings/{m['embedding_file']}"]
+            self._card(cards, n, f"ALREADY ENROLLED · similarity {m['similarity']:.2f}", m["name"], m["number"],
+                       m["face"], m["strip"], files, BAD_BG)
+
+        tk.Label(w, text="The coloured strips are the 128 embedding numbers (blue = low, red = high): "
+                         "the same face gives the same pattern.\nIf the enrolled face is on the wrong student, re-enrol or "
+                         "delete that student on the web console first, then press Re-enrol for this one.",
+                 bg=PANEL, fg=INK, font=("Segoe UI", 10), justify="left", wraplength=640).pack(anchor="w", pady=(12, 8))
+        tk.Button(w, text="Close", command=self.close, bg=INK, fg="white", activebackground=INK, activeforeground="white",
+                  relief="flat", padx=16, pady=6, cursor="hand2", font=("Segoe UI Semibold", 10)).pack(anchor="w")
+        w.lift()
+        w.focus_force()
+
+    def _card(self, parent, col, heading, name, number, face, strip, notes, color):
+        """One column: heading, the face the embedding was made from, the embedding strip, name and files."""
+        box = tk.Frame(parent, bg=PANEL, highlightbackground=color, highlightthickness=2, padx=8, pady=8)
+        box.grid(row=0, column=col, sticky="n", padx=(0, 10))
+        tk.Label(box, text=heading, bg=PANEL, fg=color, font=("Segoe UI Semibold", 9)).pack(anchor="w")
+        if face is not None:
+            img = bgr_to_photo(face, FACE_BOX)
+            self._images.append(img)
+            tk.Label(box, image=img, bg=PANEL).pack(pady=(4, 4))
+        else:
+            tk.Label(box, text="no photo / no face found", bg="#111827", fg="#9ca3af", width=22, height=10).pack(pady=(4, 4))
+        img = bgr_to_photo(strip, (FACE_BOX[0], 18))
+        self._images.append(img)
+        tk.Label(box, image=img, bg=PANEL).pack()
+        tk.Label(box, text=name, bg=PANEL, fg=INK, font=("Segoe UI Semibold", 10), wraplength=FACE_BOX[0]).pack(anchor="w", pady=(6, 0))
+        tk.Label(box, text=number, bg=PANEL, fg=INK, font=("Segoe UI", 10)).pack(anchor="w")
+        for line in notes:
+            tk.Label(box, text=line, bg=PANEL, fg=MUTED, font=("Segoe UI", 8), wraplength=FACE_BOX[0], justify="left").pack(anchor="w")
+
+    def close(self):
+        if self.win is not None and self.win.winfo_exists():
+            self.win.destroy()
+        self.win = None
 
 
 class DoorWindow:
@@ -774,7 +938,7 @@ class DoorWindow:
         self.enr_title = ttk.Label(enr, text="Waiting for the web console…", style="P.TLabel",
                                    font=("Segoe UI Semibold", 10), wraplength=VIDEO_W - 30)
         self.enr_title.grid(row=0, column=0, columnspan=3, sticky="w")
-        self.enr_hint = ttk.Label(enr, text="Start an enrolment on the web console's Enroll page.", style="Muted.TLabel",
+        self.enr_hint = ttk.Label(enr, text="Start an enrolment on the web console's Enrolment page.", style="Muted.TLabel",
                                   wraplength=VIDEO_W - 30)
         self.enr_hint.grid(row=1, column=0, columnspan=3, sticky="w", pady=(2, 6))
         self.enr_bar = ttk.Progressbar(enr, maximum=ENROL_SAMPLES, style="Enrol.Horizontal.TProgressbar")
@@ -787,6 +951,8 @@ class DoorWindow:
         self._cams_shown = None
 
         self._photo = None
+        self.dup_win = None            # DuplicateWindow showing the last rejected duplicate
+        self._dup_shown = None         # id of the duplicate already shown (each is shown once)
         self._tick_n = 0
         root.protocol("WM_DELETE_WINDOW", self.close)
         root.bind("<Escape>", lambda _e: self.close())
@@ -798,7 +964,7 @@ class DoorWindow:
         if 0 <= i < len(cams):
             index = cams[i][0]
             self.door.request_camera(index)
-            save_camera_choice(index)
+            save_setting("camera", index)
 
     def _rescan(self):
         self.rescan_btn.config(state="disabled", text="Scanning…")
@@ -814,14 +980,7 @@ class DoorWindow:
             self.video.config(image=self._blank, text=error or "Starting camera…")
             self._photo = None
             return
-        h, w = frame.shape[:2]
-        scale = min(VIDEO_W / w, VIDEO_H / h)
-        if scale != 1:
-            frame = cv2.resize(frame, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        h, w = rgb.shape[:2]
-        # Tk reads PPM natively, so no Pillow is needed
-        self._photo = tk.PhotoImage(width=w, height=h, data=b"P6 %d %d 255 " % (w, h) + rgb.tobytes(), format="PPM")
+        self._photo = bgr_to_photo(frame, (VIDEO_W, VIDEO_H))
         self.video.config(image=self._photo, text="")
 
     def _refresh_panels(self, st, snap):
@@ -852,7 +1011,7 @@ class DoorWindow:
         else:
             waiting = len(snap["pending"])
             self.enr_title.config(text=f"{waiting} enrolment(s) waiting" if waiting else "Waiting for the web console…")
-            self.enr_hint.config(text="Start an enrolment on the web console's Enroll page.")
+            self.enr_hint.config(text="Start an enrolment on the web console's Enrolment page.")
             self.enr_bar.config(value=0)
             self.photo_btn.config(state="disabled")
             self.skip_btn.config(state="disabled")
@@ -969,7 +1128,6 @@ class DoorWindow:
             box = tk.Frame(w, bg=PANEL)
             box.pack(fill="x")
             box.columnconfigure(1, weight=1)
-            from arduino_link import TEST_STEPS
             for r, (key, label, _) in enumerate(TEST_STEPS):
                 icon = tk.Label(box, text="·", bg=PANEL, font=("Segoe UI Semibold", 12), width=2)
                 icon.grid(row=r * 3, column=0, sticky="nw")
@@ -1053,6 +1211,8 @@ class DoorWindow:
             self.banner.config(text=r[1], bg={"granted": OK_BG, "already": WARN_BG}.get(r[0], BAD_BG), fg="white")
         elif st["enrolling"]:
             self.banner.config(text=f"Enrolling {st['enrolling']['name']}", bg=WARN_BG, fg="white")
+        elif st["problem"]:   # a dependency could not be installed (see check_dependencies.py)
+            self.banner.config(text="Face recognition unavailable\nsee the Activity log", bg=WARN_BG, fg="white")
         elif not st["recognising"]:
             self.banner.config(text="Recognition is off\npress Start recognition to scan students", bg=IDLE_BG, fg=MUTED)
         elif st["admin_mode"]:
@@ -1064,10 +1224,21 @@ class DoorWindow:
         else:
             self.banner.config(text="Scanning · look at the camera" if st["arduino"] else "Ready · look at the camera", bg=IDLE_BG, fg=INK)
 
+    def _refresh_duplicate(self, st):
+        """Show each rejected duplicate once in the comparison window (it stays until closed)."""
+        dup = st["last_duplicate"]
+        if dup is None or dup["id"] == self._dup_shown:
+            return
+        self._dup_shown = dup["id"]
+        if self.dup_win is not None:
+            self.dup_win.close()
+        self.dup_win = DuplicateWindow(self.root, dup)
+
     def tick(self):
         st = self.door.state()
         self._show_frame(st["frame"], st["camera_error"])
         self._refresh_banner(st)
+        self._refresh_duplicate(st)
         if self._tick_n % 8 == 0:      # panels ~4 times a second is plenty
             self._refresh_panels(st, self.backend.snapshot())
         self._tick_n += 1
@@ -1084,8 +1255,23 @@ class DoorWindow:
         self.root.destroy()
 
 
-def run_gui(args):
+def warn_duplicate_faces(store):
+    """One face, one student: list stored faces that belong to two students (e.g. enrolled before this rule).
+    The door refuses such a face until one of the two students is re-enrolled or deleted."""
+    pairs = store.duplicate_pairs()
+    for a, b, sim in pairs:
+        pa, pb = store.people[a], store.people[b]
+        log(f"DUPLICATE FACE STORED: {pa['studentNumber']} {pa['name']} ~ {pb['studentNumber']} {pb['name']} "
+            f"(similarity {sim:.2f}): the door refuses this face; re-enrol or delete the wrong student")
+    return pairs
+
+
+def start_door(args):
+    """Start the three worker threads (server, Arduino, camera). Returns (door, backend, link)."""
+    for problem in SETUP_PROBLEMS:   # already printed by check_dependencies.py; this puts them in the Activity panel
+        LOG.append(f"{time.strftime('%H:%M:%S')} NOT READY: {problem}")
     store = FaceStore(DATA)
+    warn_duplicate_faces(store)
     client = SrsClient(args.url, args.device_id, args.key)
     backend = Backend(client, store)
     link = ArduinoLink(log=log)       # the Arduino door unit; the program works without it
@@ -1096,14 +1282,43 @@ def run_gui(args):
     log(f"backend {args.url}; device #{args.device_id}")
     backend.start()   # waits out a sleeping Render server by itself (shows OFFLINE until it answers)
     door.start()
-    DoorWindow(args, door, backend, link).run()
+    return door, backend, link
+
+
+def stop_door(door, backend, link):
+    door.stop.set()
+    backend.stop.set()
+    link.stop.set()
+    link.disconnect()   # says goodbye: the Arduino's LCD shows NOT CONNECTED
     door.join(timeout=3)
     log(f"stopped ({len(backend.events)} event(s) still queued; they upload next time)")
 
 
+def run_gui(args):
+    door, backend, link = start_door(args)
+    try:
+        DoorWindow(args, door, backend, link).run()
+    finally:
+        stop_door(door, backend, link)
+
+
+def run_console(args):
+    """Without Tkinter: the same door, no window. Recognition starts straight away; Ctrl+C stops it."""
+    door, backend, link = start_door(args)
+    log("no window (Tkinter is missing): running in the console, press Ctrl+C to stop")
+    door.toggle_recognition()
+    try:
+        while door.is_alive():
+            door.join(timeout=1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        stop_door(door, backend, link)
+
+
 def key_help(device_id):
     return (f"device key not accepted for device #{device_id}: copy the key from the web app "
-            "(Venues & Devices > PC-01 > Copy) into device_key in config.ini, then restart")
+            "(Venues & Devices > this device > Reveal) into device_key in config.ini, then restart")
 
 
 def check(args):
@@ -1122,21 +1337,31 @@ def check(args):
     log(f"roster: {len(client.roster())} student(s) enrolled on this device")
     store = FaceStore(DATA)
     log(f"faces stored on this PC: {len(store.people)}")
-    FaceEngine()
-    log("face models load OK.")
+    pairs = warn_duplicate_faces(store)
+    log(f"faces stored for two students: {len(pairs) or 'none'}")
+    if FaceEngine is not None and "face models missing" not in " ".join(SETUP_PROBLEMS):
+        FaceEngine()
+        log("face models load OK.")
     cams = list_cameras()
     log("cameras: " + (", ".join(f"#{i} {w}x{h}" for i, w, h in cams) or "none found")
         + (f"  (auto picks #{auto_camera(cams)})" if cams else ""))
     ports = available_ports()
     log("serial ports: " + (", ".join(f"{p} ({d})" for p, d in ports) or "none")
         + (f"  (Arduino looks like {guess_arduino_port()})" if guess_arduino_port() else ""))
-    log("Everything is ready.")
+    for problem in SETUP_PROBLEMS:
+        log("NOT READY:", problem)
+    log("Everything is ready." if not SETUP_PROBLEMS else f"{len(SETUP_PROBLEMS)} dependency problem(s), see above.")
 
 
 if __name__ == "__main__":
     settings = load_settings()
     try:
-        check(settings) if settings.check else run_gui(settings)
+        if settings.check:
+            check(settings)
+        elif tk is None:
+            run_console(settings)
+        else:
+            run_gui(settings)
     except SrsError as e:
         fail(f"Backend refused: {e}" + (f"\n{key_help(settings.device_id)}" if e.status in (401, 404) else ""))
     except Exception as e:  # e.g. a missing model file: in the .exe nobody would see the traceback

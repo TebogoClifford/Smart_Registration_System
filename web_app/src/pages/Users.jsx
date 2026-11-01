@@ -11,10 +11,11 @@ import ConfirmDeleteDialog from '@/components/ConfirmDeleteDialog';
 import { api } from '@/lib/api';
 import { useDraft } from '@/lib/drafts';
 import { useAuth } from '@/lib/auth';
+import { examTime } from '@/lib/exams';
 
 const ROLES = [{ value: 'invigilator', label: 'Invigilator' }, { value: 'admin', label: 'Administrator' }];
 const EMPTY = { name: '', email: '', staff_number: '', phone: '', role: 'invigilator', password: '', mustChangePassword: true };
-const when = (t) => (t ? new Date(t).toLocaleString() : 'never');
+const when = (t) => (t ? examTime(t) : 'never');
 
 function Field({ id, label, children }) {
   return (

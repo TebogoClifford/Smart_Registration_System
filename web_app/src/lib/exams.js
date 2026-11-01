@@ -1,12 +1,31 @@
 // Helpers shared by the exam calendar and the dashboard's exam hall bookings.
 
-// YYYY-MM-DD in the browser's own time zone (toISOString would use UTC and can be a day off).
+// Exams run on South African time, whatever time zone the viewer's computer is set to. Keep this
+// in step with EXAM_TIMEZONE on the server (set VITE_EXAM_TIMEZONE to change it).
+export const EXAM_TZ = import.meta.env.VITE_EXAM_TIMEZONE || 'Africa/Johannesburg';
+
+// YYYY-MM-DD of a calendar Date (a day cell in a month grid), in the browser's own calendar.
 export const localDate = (date = new Date()) => {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 };
+
+// YYYY-MM-DD of a moment (now, or an event's time) in the exam time zone: which exam day it was.
+export const examDate = (moment = new Date()) => {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: EXAM_TZ, year: 'numeric', month: '2-digit', day: '2-digit' })
+    .formatToParts(new Date(moment)).map((x) => [x.type, x.value]));
+  return `${p.year}-${p.month}-${p.day}`;
+};
+
+// A timestamp shown in the exam time zone, e.g. examTime(t, { hour: '2-digit', minute: '2-digit' }).
+export const examTime = (t, opts = { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) =>
+  (t ? new Date(t).toLocaleString([], { ...opts, timeZone: EXAM_TZ }) : '');
+
+// The hour (0-23) now in the exam time zone (for "Good morning").
+export const examHour = (date = new Date()) =>
+  Number(new Intl.DateTimeFormat('en-GB', { timeZone: EXAM_TZ, hour: '2-digit', hourCycle: 'h23' }).format(date));
 
 // A YYYY-MM-DD string as a local Date at noon (noon keeps day arithmetic clear of DST edges).
 export const parseDate = (s) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d, 12); };

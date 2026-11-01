@@ -140,6 +140,10 @@ export default function StudentDetail() {
                 ))}
               </SelectContent>
             </Select>
+            {/* the face is stored on the device, so a new device must capture it again (the server sets 'pending') */}
+            {student && deviceId && String(student.device_id) !== deviceId && (
+              <p className="text-xs text-amber-700">After saving, the student must stand in front of the new device: their face is captured again there.</p>
+            )}
           </div>
           <div className="flex flex-wrap gap-2">
             <Button onClick={handleSave}>Save Changes</Button>

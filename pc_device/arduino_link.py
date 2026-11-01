@@ -5,7 +5,10 @@ firmware) stay current even without a camera, and runs the hardware test step by
 The door program works without an Arduino; this only does something once a port is connected.
 
 Messages from the Arduino (9600 baud, one per line):
-  HELLO SRS-DOOR v2 LCD=0x27   S <cm> <state>   READY   AWAY   PONG v2   T ...  (see srs_door.ino)
+  HELLO SRS-DOOR v3 LCD=0x27   S <cm> <state>   READY   AWAY   PONG v3   T ...  (see srs_door.ino)
+
+Heartbeat: while connected this sends "H" every second, and "X" when it disconnects. The Arduino
+shows NOT CONNECTED on its LCD when the heartbeat stops (app closed, crashed or port disconnected).
 """
 import threading
 import time
@@ -19,6 +22,8 @@ except ImportError:  # pyserial is only needed with an Arduino
     list_ports = None
 
 STATUS_STALE = 2.0   # seconds without an "S" line before the live values count as stale
+HEARTBEAT_EVERY = 1.0  # seconds between "H" lines; the Arduino gives up after 3 s without one
+BOOT_WAIT = 2.0        # opening the port restarts the Arduino: no heartbeat until it has booted
 
 
 def available_ports():
@@ -65,7 +70,9 @@ class ArduinoLink(threading.Thread):
         self.port = None
         self.error = ""
         self.buf = b""
-        self.firmware = None        # e.g. "v2" from HELLO / PONG
+        self.write_lock = threading.Lock()  # the reader, the test and the window all send
+        self.heartbeat_at = 0.0     # when the next "H" is due
+        self.firmware = None        # e.g. "v3" from HELLO / PONG
         self.lcd = None             # "0x27", "NONE" or None (unknown)
         self.distance = None        # cm, -1 = nothing in range
         self.unit_state = None      # WAITING / HOLDING / SCANNING / RESULT / LEAVING / TESTING
@@ -90,7 +97,7 @@ class ArduinoLink(threading.Thread):
             self.error = "pyserial is not installed (pip install pyserial)"
             return False
         try:
-            ser = serial.Serial(port, 9600, timeout=0.1)
+            ser = serial.Serial(port, 9600, timeout=0.1, write_timeout=1)
         except Exception as err:  # port busy, unplugged, ...
             self.error = f"cannot open {port}: {err}"
             self.log(f"Arduino: {self.error}")
@@ -99,6 +106,7 @@ class ArduinoLink(threading.Thread):
             self.ser, self.port, self.error, self.buf = ser, port, "", b""
             self.firmware = self.lcd = self.distance = self.unit_state = None
             self.status_at = self.gate_at = 0.0
+            self.heartbeat_at = time.time() + BOOT_WAIT
         self.log(f"Arduino: connected on {port} (it restarts, about 2 s)")
         return True
 
@@ -107,6 +115,12 @@ class ArduinoLink(threading.Thread):
             ser, self.ser = self.ser, None
             self.gate_at = 0.0
         if ser:
+            try:
+                with self.write_lock:
+                    ser.write(b"X\n")   # goodbye: the LCD shows NOT CONNECTED straight away
+                    ser.flush()
+            except Exception:
+                pass                  # unplugged: the Arduino notices the missing heartbeat instead
             try:
                 ser.close()
             except Exception:
@@ -142,7 +156,8 @@ class ArduinoLink(threading.Thread):
         if not ser:
             return False
         try:
-            ser.write((text + "\n").encode("ascii"))
+            with self.write_lock:
+                ser.write((text + "\n").encode("ascii"))
             return True
         except Exception as err:
             self.error = f"write failed: {err}"
@@ -156,6 +171,10 @@ class ArduinoLink(threading.Thread):
             ser = self.ser
             if not ser:
                 self.stop.wait(0.2)
+                continue
+            if time.time() >= self.heartbeat_at:  # tell the Arduino the app is still running
+                self.heartbeat_at = time.time() + HEARTBEAT_EVERY
+                self.send("H")
                 continue
             try:
                 chunk = ser.read(256)
@@ -199,7 +218,7 @@ class ArduinoLink(threading.Thread):
                 self.firmware = parts[1] if len(parts) > 1 else self.firmware
             elif parts[0] == "T":
                 self.test_lines.append((now, msg))
-        if parts[0] in ("HELLO",):
+        if parts[0] == "HELLO":
             self.log(f"Arduino: {msg}")
 
     # -- what the window and the door engine read
