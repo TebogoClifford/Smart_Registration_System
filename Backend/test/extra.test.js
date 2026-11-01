@@ -192,3 +192,17 @@ test('student: a fresh capture request is not expired; an enrolled student never
   await call('PUT', `/api/students/${fresh.id}/enrollment`, { status: 'enrolled' }, key());
   assert.strictEqual((await call('GET', `/api/students/${fresh.id}`)).json.enrollment_expired, false);
 });
+
+test('student: moving an enrolled student to another device asks that device to capture them', async () => {
+  const st = (await call('POST', '/api/students', { email: 'mover@example.com', student_number: 'XMOVE', name: 'Mover', device_id: ctx.dev.id })).json;
+  await call('PUT', `/api/students/${st.id}/enrollment`, { status: 'enrolled' }, key());
+  const body = { student_number: 'XMOVE', name: 'Mover', email: 'mover@example.com', device_id: ctx.dev2.id };
+  const moved = (await call('PUT', `/api/students/${st.id}`, body)).json;
+  assert.strictEqual(moved.device_id, ctx.dev2.id);
+  assert.strictEqual(moved.enrollment_status, 'pending');          // not "enrolled" on a device without the face
+  const pending = (await call('GET', `/api/devices/${ctx.dev2.id}/pending-enrollments`, undefined, { 'X-Device-Key': ctx.dev2.api_key })).json;
+  assert.ok(pending.some((p) => p.studentId === st.id));            // the new device picks them up
+  await call('PUT', `/api/students/${st.id}/enrollment`, { status: 'enrolled' }, { 'X-Device-Key': ctx.dev2.api_key });
+  const same = (await call('PUT', `/api/students/${st.id}`, { ...body, name: 'Mover Renamed' })).json;
+  assert.strictEqual(same.enrollment_status, 'enrolled');           // a plain edit (same device) keeps the status
+});

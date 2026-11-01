@@ -1,16 +1,38 @@
-# React + Vite
+# Web console (React + Vite)
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+The website administrators and invigilators use: dashboard, venues and devices, students and face enrolment, modules, exam bookings and calendar, email log and accounts. It talks only to the backend API; how each page does that is in [`docs/CONNECTION.md`](docs/CONNECTION.md).
 
-Currently, two official plugins are available:
+* **Live:** deployed on Vercel from `main` (build settings in the root [`vercel.json`](../vercel.json)).
+* **Built with:** React 19, React Router, Tailwind CSS 4, shadcn/ui components on Base UI, axios, sonner (toasts), lucide icons.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Run it locally
+Node.js 22.18 or newer. Create `.env.local`:
+```
+VITE_API_BASE_URL=http://localhost:3000   # your local backend; leave out to use the live Render backend
+VITE_DEMO=true                            # optional: buttons that fill in the demo accounts (never in the real build)
+# VITE_EXAM_TIMEZONE=Africa/Johannesburg  # optional: the exam time zone (default shown); keep in step with the backend
+```
+```
+npm install
+npm run dev        # http://localhost:5173
+npm run lint       # ESLint
+npm run build      # production build into dist/
+npm run preview    # serve that build locally
+```
+A full local demo with sample data is described in [`../DEMO.md`](../DEMO.md).
 
-## React Compiler
+## Roles
+* **Administrator:** everything, including Accounts, adding and editing venues and devices, and seeing or replacing device keys.
+* **Invigilator:** dashboard, students, enrolment, modules, exam bookings, calendar and email log.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## Layout
+```
+src/App.jsx              routes (each page is loaded when first opened)
+src/components/Layout.jsx sidebar, page title and section tabs
+src/lib/api.js           every call to the backend
+src/lib/exams.js         dates and times in the exam time zone, calendar helpers
+src/lib/drafts.js        unsaved form input is kept while you move between pages
+src/pages/               one file per page
+src/components/          shared parts (dialogs, calendar, Recognised now, …)
+src/components/ui/       shadcn/ui building blocks
+```

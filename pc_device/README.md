@@ -1,34 +1,39 @@
 # PC door program (webcam face recognition)
 
-`srs_pc_app.py` turns a Windows PC with a USB webcam into an SRS door device. It talks to the backend exactly like the ESP32-CAM would (see [`../Backend/DEVICE_API.md`](../Backend/DEVICE_API.md)), using [`../device_client/srs_client.py`](../device_client/srs_client.py).
+`srs_pc_app.py` turns a Windows PC with a USB webcam into an SRS door device. It talks to the backend through the same device API an ESP32-CAM would use (see [`../Backend/DEVICE_API.md`](../Backend/DEVICE_API.md)), using [`../device_client/srs_client.py`](../device_client/srs_client.py).
 
-| What happens | Where you see it |
+| What happens | What you see |
 |---|---|
-| An invigilator presses **Start enrollment** on the web console | The PC window shows *ENROLLING name*, captures 5 shots when one face is close enough, then the Enroll page flips to **Enrolled** |
-| The new face looks like a student already stored on this PC | Enrolment pauses and a **Possible duplicate face** window shows both faces, their embeddings as colour strips and the similarity. Press **Same person · reject enrolment** (reported as *failed*) or **Different people · enrol anyway**. Closing the window or **Skip** = reject |
-| A student walks up | **GRANTED name – seat N** if they have a seat in this venue's current exam session (09:00 before noon, 13:00 after), otherwise **DENIED** |
-| Every decision | Appears on the Dashboard; queued on disk while offline and uploaded later (never twice) |
+| An invigilator presses **Start enrolment** on the web console's Enrolment page | The window shows *Enrolling name*, takes 5 pictures once one face is close enough, and the web page changes to **Enrolled** |
+| The new face looks like a student already stored on this PC | Enrolment pauses and a **Possible duplicate face** window shows both faces, their embeddings as colour strips and the similarity. Press **Same person · reject enrolment** (reported as *failed*) or **Different people · enrol anyway**. Closing the window or pressing **Skip** rejects |
+| **Start recognition** is pressed (recognition is **off** when the program starts) | The door begins scanning faces. Press **Stop recognition** to pause it; enrolment works either way |
+| An enrolled student walks up | **RECOGNISED name**, with *seat N · module* when they have a seat in this hall's current exam session (09:00 before 12:00, 13:00 after), or *no exam seat in this session*. Every enrolled student is let in once per session; the web console shows who has no seat |
+| The same student again in that session | **ALREADY INSIDE** (amber) |
+| After their session has ended (12:00 / 16:00) | **SESSION ENDED** – they were signed out automatically and are not let in again |
+| A face that matches nobody | **NOT RECOGNISED** |
+| Every decision | Appears on the web console's Dashboard. While offline, decisions are queued on disk and uploaded later (never twice) |
 
-Face embeddings stay on this PC in `data/embeddings/` (photos in `data/photos/`). The backend only stores the result and one photo for re-enrolment.
+Face embeddings (the 128 numbers that describe a face) stay on this PC in `data/embeddings/`, the enrolment photos in `data/photos/`. The backend only stores the result and one photo for re-enrolment.
 
 ## Set up (once)
+Needs Python 3.9 or newer with Tkinter (included in the Windows installer from python.org; on Linux install `python3-tk`).
 ```
 cd pc_device
 pip install -r requirements.txt
 python download_models.py          # two OpenCV Zoo models, ~39 MB, checksum-verified
-copy config.example.ini config.ini # then fill in device_id and device_key
+copy config.example.ini config.ini # Windows; on macOS/Linux: cp config.example.ini config.ini
 ```
-An **administrator** finds the device id and key on the device's page in the web console (Venues & Devices → Manage → Reveal). Invigilators cannot see keys.
-If the key is replaced there (**Replace**), copy the new one into `device_key` in `config.ini` and restart the program; until then it shows OFFLINE with "device key not accepted".
+Then fill in `device_id` and `device_key` in `config.ini`. An **administrator** finds them on the device's page in the web console (Venues & Devices → the device → **Reveal**). Invigilators cannot see keys.
+If an administrator replaces the key there (**Replace**), copy the new one into `device_key` and restart the program; until then it shows OFFLINE with "device key not accepted".
 
 ## Run
 ```
-python srs_pc_app.py --check       # tests URL + key + models, no camera
+python srs_pc_app.py --check       # tests URL, key, models, cameras and serial ports, no camera window
 python srs_pc_app.py               # opens the door window
 ```
-The window shows the camera top-right with the GRANTED / DENIED banner under it, and on the left the device and connection, the enrolment in progress (with a **Skip** button), the current exam session's seat list and an activity log. Close the window or press **Esc** to stop.
+**The window:** on the right, the camera picture with the result banner under it, the **Start recognition** button, the camera picker and the **Enrolment** panel (progress bar and **Skip**). On the left: the **Device** panel (server, device, last contact, faces stored, queued events, camera), the **Hardware** panel for the Arduino door unit, the current **Exam session** with its seat list, and the **Activity** log. Close the window or press **Esc** to stop.
 
-**Choosing the camera:** pick it from the **Camera** list under the video (press **Rescan** after plugging a webcam in). The choice is saved in `config.ini`. With `camera = auto` the highest-numbered camera is used, which is normally a USB webcam rather than the laptop's built-in one.
+**Choosing the camera:** pick it from the **Camera** list under the video (press **Rescan** after plugging a webcam in). The choice is saved in `config.ini`. With `camera = auto` the highest-numbered camera is used, which is normally a USB webcam rather than the laptop's built-in one. `python webcam_test.py` checks the cameras on their own.
 
 Options (or in `config.ini`): `--url`, `--device-id`, `--key`, `--camera 0` (default `auto`), `--serial COM3` (the Arduino door unit, see below), `--min-face 90` (pixels; raise it to make people step closer).
 
@@ -36,14 +41,15 @@ Options (or in `config.ini`): `--url`, `--device-id`, `--key`, `--camera 0` (def
 
 `arduino/srs_door/srs_door.ino` (version 2) runs on an Arduino Mega, Uno or Nano. The student must stand 25–50 cm
 from the sensor and hold still for **1 second**; only then does the Arduino beep and tell this
-program to take the picture. The answer appears on the LCD with a beep (two rising tones = granted,
-one long low tone = denied). The student must step away before the next scan.
+program to take the picture. The answer appears on the LCD with a beep: ACCESS GRANTED (two rising tones),
+ACCESS DENIED (one long low tone, also used for SESSION ENDED and NOT RECOGNISED) or ALREADY INSIDE.
+The student must step away before the next scan.
 
 | Part | Pin |
 |---|---|
 | HC-SR04 ultrasonic | VCC 5V, GND, TRIG D9, ECHO D10 |
 | 16x2 LCD with I2C backpack | VCC 5V, GND, SDA pin 20, SCL pin 21 (Mega) · SDA A4, SCL A5 (Uno/Nano) |
-| Buzzer (passive) | + D8, − GND |
+| Buzzer (passive or active) | + D8, − GND |
 
 1. In the Arduino IDE install the library **LiquidCrystal I2C** (Frank de Brabander).
 2. Open `arduino/srs_door/srs_door.ino`, pick your board (e.g. Arduino Mega or Mega 2560) and port, and upload.
@@ -56,8 +62,8 @@ one long low tone = denied). The student must step away before the next scan.
 ### Hardware panel and test
 The panel shows live: the port and sketch version, the **distance** (green when 25–50 cm), what the
 door unit is doing (WAITING / HOLDING / SCANNING / …, and when a picture is allowed), whether the
-**LCD** was found and at which address, and the Arduino's last message. The Device panel shows the
-camera's frames per second and the size of the face in view.
+**LCD** was found and at which address, the buzzer type and the Arduino's last message. The Device
+panel shows the camera's frames per second and the size of the face in view.
 
 **Test hardware** (any time) opens a window that checks, one by one, and marks each ✔ or ✖ with
 what to check when it fails:
@@ -65,13 +71,13 @@ what to check when it fails:
 3. LCD found on the I2C bus · 4. LCD shows the test screen (you answer Yes/No) ·
 5. buzzer beeps (you answer; if not, it tries the other buzzer type) · 6. distance sensor gives readings · 7. it sees your hand at 25–50 cm.
 
-Without an Arduino the program scans any face big enough on camera, as before.
+Without an Arduino the program scans any face big enough on camera.
 Serial messages (9600 baud, one per line) are listed at the top of `srs_door.ino`.
 
 ## Notes
 * Matching uses SFace cosine similarity with threshold 0.40 (`MATCH_THRESHOLD` in `face_engine.py`). Raise it if strangers are ever accepted, lower it if enrolled students are denied.
-* Each face is compared with *every* face stored on this PC first, and only then checked against the seat list, so a stranger cannot be "closest" to a seated student by elimination.
-* The same student is logged at most once every 15 seconds.
+* Each face is compared with *every* face stored on this PC, so a stranger is never "closest" to someone by elimination. The seat list does not decide entry: it only adds the seat to the banner (see the table above).
+* **How often a decision is logged.** With the Arduino, every deliberate 1-second hold at the marker gets an answer and is logged. Without it, the same student is logged at most once every 15 seconds, a student who is already inside (or whose session ended) at most once a minute, and an unknown face once until it has left the picture for 2 seconds.
 * **Duplicate check at enrolment:** the averaged new embedding is compared with every face stored on this PC (except the
   student's own, so re-enrolling is fine). Anything at or above `DUPLICATE_THRESHOLD` (0.40, the same as the door, in
   `face_engine.py`) needs a person's decision. What was compared and decided is saved in the new

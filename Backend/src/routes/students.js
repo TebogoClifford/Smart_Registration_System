@@ -39,7 +39,7 @@ const badEmail = (e) => !EMAIL_RE.test(e) || e.length > 255;
 
 router.param('id', validateIdParam);
 
-// POST /api/students — start enrollment (status defaults to 'pending')
+// POST /api/students — start enrolment (status defaults to 'pending')
 router.post('/', async (req, res) => {
   const { student_number, name, device_id } = (req.body ?? {});
   const course_name = checkCourse(req.body?.course_name);
@@ -107,7 +107,7 @@ router.put('/:id', async (req, res) => {
   if (badEmail(email)) return res.status(400).json({ error: BAD_EMAIL });
   try {
     // a course saved before the list existed may stay as it is
-    const current = await prisma.students.findUnique({ where: { id: Number(id) }, select: { course_name: true } });
+    const current = await prisma.students.findUnique({ where: { id: Number(id) }, select: { course_name: true, device_id: true } });
     const course_name = checkCourse(req.body?.course_name, current?.course_name);
     if (course_name === undefined) return res.status(400).json({ error: BAD_COURSE });
     const dup = await prisma.students.findFirst({
@@ -116,9 +116,15 @@ router.put('/:id', async (req, res) => {
     if (dup) {
       return res.status(409).json({ error: 'this student number is already registered on that device' });
     }
+    // The face lives on the device, so a student moved to another device is not enrolled there yet:
+    // set them back to pending, which asks the new device to capture them (the old one drops its copy).
+    const moved = current && current.device_id !== Number(device_id);
     const { count } = await prisma.students.updateMany({
       where: { id: Number(id) },
-      data: { student_number: String(student_number), name: String(name), email, device_id: Number(device_id), course_name },
+      data: {
+        student_number: String(student_number), name: String(name), email, device_id: Number(device_id), course_name,
+        ...(moved && { enrollment_status: 'pending', enrollment_requested_at: new Date() }),
+      },
     });
     if (count === 0) return res.status(404).json({ error: 'student not found' });
     res.json(await getStudent(id));
@@ -142,8 +148,8 @@ router.post('/:id/re-enroll', async (req, res) => {
   }
 });
 
-// PUT /api/students/:id/enrollment — the device reports the outcome of an enrollment capture
-// (design: Student Enrollment, step 7-8). Needs the device's key in X-Device-Key.
+// PUT /api/students/:id/enrollment — the device reports the outcome of an enrolment capture
+// (design: Student Enrolment, step 7-8). Needs the device's key in X-Device-Key.
 router.put('/:id/enrollment', async (req, res) => {
   const { status } = (req.body ?? {});
   if (!['enrolled', 'failed'].includes(status)) {

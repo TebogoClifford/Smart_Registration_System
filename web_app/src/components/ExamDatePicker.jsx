@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, Loader2, CheckCircle2, XCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { api } from '@/lib/api';
-import { localDate, parseDate, addDays, formatDay } from '@/lib/exams';
+import { localDate, parseDate, addDays, formatDay, examDate } from '@/lib/exams';
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const SLOTS = ['09:00', '13:00'];
@@ -18,11 +18,11 @@ function monthGrid(first) {
 // marked available or not (too few seats, a student has another exam then, already booked, past),
 // with both sessions shown as "09" / "13". excludeBookingId = the booking being moved.
 export default function ExamDatePicker({ moduleId, venueId, slot, value, onChange, excludeBookingId }) {
-  const [month, setMonth] = useState(() => { const d = parseDate(value || localDate()); return new Date(d.getFullYear(), d.getMonth(), 1, 12); });
+  const [month, setMonth] = useState(() => { const d = parseDate(value || examDate()); return new Date(d.getFullYear(), d.getMonth(), 1, 12); });
   const [avail, setAvail] = useState(null); // { days: Map(date -> slots), needed, venueName }
   const [loading, setLoading] = useState(false);
   const [focus, setFocus] = useState(null); // the day being hovered (its reasons are shown below)
-  const today = localDate();
+  const today = examDate();
 
   // follow the chosen date to its month (e.g. ?date= from the calendar)
   useEffect(() => {

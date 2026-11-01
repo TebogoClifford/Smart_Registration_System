@@ -1,7 +1,7 @@
 """srs_pc_app.py - the Smart Registration System door program for a PC with a USB webcam.
 
 It plays the ESP32-CAM's part (see Backend/DEVICE_API.md):
-  * ENROL  - when an invigilator presses "Start enrollment" on the web console, this program sees
+  * ENROL  - when an invigilator presses "Start enrolment" on the web console, this program sees
              the student in pending-enrollments, captures their face automatically, saves
              data/photos/<student number>.jpg and data/embeddings/<student number>.json on this PC,
              and reports "enrolled" (or "failed") and the photo back to the console.
@@ -680,7 +680,7 @@ FACE_BOX = (168, 168)   # size of each face in the duplicate window
 class DuplicateWindow:
     """Pop-up shown when a new enrolment looks like a face already stored on this PC: the new face and
     each look-alike side by side, with their embeddings as colour strips and the similarity. The operator
-    decides; closing the window counts as "reject" (the safe choice; Re-enroll on the web console retries)."""
+    decides; closing the window counts as "reject" (the safe choice; Re-enrol on the web console retries)."""
 
     def __init__(self, root, review, answer):
         self.answer = answer            # answer(True) = enrol anyway, answer(False) = reject
@@ -868,7 +868,7 @@ class DoorWindow:
         self.enr_title = ttk.Label(enr, text="Waiting for the web console…", style="P.TLabel",
                                    font=("Segoe UI Semibold", 10), wraplength=VIDEO_W - 30)
         self.enr_title.grid(row=0, column=0, columnspan=2, sticky="w")
-        self.enr_hint = ttk.Label(enr, text="Start an enrolment on the web console's Enroll page.", style="Muted.TLabel",
+        self.enr_hint = ttk.Label(enr, text="Start an enrolment on the web console's Enrolment page.", style="Muted.TLabel",
                                   wraplength=VIDEO_W - 30)
         self.enr_hint.grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 6))
         self.enr_bar = ttk.Progressbar(enr, maximum=ENROL_SAMPLES, style="Enrol.Horizontal.TProgressbar")
@@ -939,7 +939,7 @@ class DoorWindow:
         else:
             waiting = len(snap["pending"])
             self.enr_title.config(text=f"{waiting} enrolment(s) waiting" if waiting else "Waiting for the web console…")
-            self.enr_hint.config(text="Start an enrolment on the web console's Enroll page.")
+            self.enr_hint.config(text="Start an enrolment on the web console's Enrolment page.")
             self.enr_bar.config(value=0)
             self.skip_btn.config(state="disabled")
 

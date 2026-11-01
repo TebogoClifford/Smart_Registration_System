@@ -1,23 +1,32 @@
+import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from '@/components/ui/sonner';
 import Layout from './components/Layout';
 import AuthProvider from './components/AuthProvider';
 import { useAuth } from './lib/auth';
 
-import Dashboard from './pages/Dashboard';
-import VenueDeviceManagement from './pages/VenueDeviceManagement';
-import VenueDetail from './pages/VenueDetail';
-import DeviceDetail from './pages/DeviceDetail';
-import StudentList from './pages/StudentList';
-import StudentDetail from './pages/StudentDetail';
-import Enroll from './pages/Enroll';
-import Modules from './pages/Modules';
-import Bookings from './pages/Bookings';
-import ExamCalendar from './pages/ExamCalendar';
-import EmailLog from './pages/EmailLog';
-import Users from './pages/Users';
+// Each page is downloaded only when it is first opened, so the first visit loads much less.
+// After a new deploy an open tab may ask for page files that no longer exist: reload once to get the new ones.
+const lazyPage = (load) => lazy(() => load().catch((err) => {
+  try {
+    if (!sessionStorage.getItem('srs.reloadedForUpdate')) { sessionStorage.setItem('srs.reloadedForUpdate', '1'); window.location.reload(); }
+  } catch { /* storage blocked: just show the error */ }
+  throw err;
+}));
+const Dashboard = lazyPage(() => import('./pages/Dashboard'));
+const VenueDeviceManagement = lazyPage(() => import('./pages/VenueDeviceManagement'));
+const VenueDetail = lazyPage(() => import('./pages/VenueDetail'));
+const DeviceDetail = lazyPage(() => import('./pages/DeviceDetail'));
+const StudentList = lazyPage(() => import('./pages/StudentList'));
+const StudentDetail = lazyPage(() => import('./pages/StudentDetail'));
+const Enroll = lazyPage(() => import('./pages/Enroll'));
+const Modules = lazyPage(() => import('./pages/Modules'));
+const Bookings = lazyPage(() => import('./pages/Bookings'));
+const ExamCalendar = lazyPage(() => import('./pages/ExamCalendar'));
+const EmailLog = lazyPage(() => import('./pages/EmailLog'));
+const Users = lazyPage(() => import('./pages/Users'));
+const Account = lazyPage(() => import('./pages/Account'));
 import Login from './pages/Login';
-import Account from './pages/Account';
 import ForcePasswordChange from './pages/ForcePasswordChange';
 
 // Shows the sign-in page until the server says we are signed in (or sign-in is switched off).
@@ -44,6 +53,7 @@ export default function App() {
       <AuthProvider>
         <Gate>
           <div className="app-container">
+            <Suspense fallback={<div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">Loading…</div>}>
             <Routes>
               <Route path="/" element={<Layout />}>
                 <Route index element={<Dashboard />} />
@@ -62,6 +72,7 @@ export default function App() {
                 <Route path="account" element={<Account />} />
               </Route>
             </Routes>
+            </Suspense>
           </div>
         </Gate>
       </AuthProvider>

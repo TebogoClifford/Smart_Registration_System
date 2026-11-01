@@ -101,7 +101,7 @@ class SrsClient:
                              data=jpeg_bytes, headers={"Content-Type": "image/jpeg"})
 
     def report_enrollment(self, student_id, ok):
-        """Tell the web console how the capture went. The Enroll page is waiting for exactly this."""
+        """Tell the web console how the capture went. The Enrolment page is waiting for exactly this."""
         return self._request("PUT", f"/api/students/{student_id}/enrollment",
                              json={"status": "enrolled" if ok else "failed"})
 

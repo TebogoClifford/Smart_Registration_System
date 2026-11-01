@@ -13,7 +13,6 @@ import { useDraft, clearDrafts } from '@/lib/drafts';
 import { UserPlus, CheckCircle2, Info, AlertCircle, Loader2, XCircle, RefreshCcw } from 'lucide-react';
 
 const POLL_MS = 3000;                 // how often the page asks the backend whether the device has finished
-const ENROLL_WAIT_MS = 10 * 60 * 1000; // the backend drops requests nobody collected after 10 minutes
 
 function TableSkeleton() {
   return (
@@ -37,7 +36,6 @@ export default function Enroll() {
   const [loading, setLoading] = useState(false);
   const { user } = useAuth();
   const [createdId, setCreatedId] = useDraft('enroll:createdId', null);   // id of the pending student record the device must capture
-  const [startedAt, setStartedAt] = useDraft('enroll:startedAt', 0);      // when the capture request was made (for the 10-minute limit)
   const [failReason, setFailReason] = useDraft('enroll:failReason', '');  // 'device' (device reported failure) or 'timeout'
 
   // Form State
@@ -63,7 +61,7 @@ export default function Enroll() {
       setVenues(Array.isArray(venueData) ? venueData : []);
       setDevices(Array.isArray(deviceData) ? deviceData : []);
     } catch (err) {
-      console.error('Failed to load enrollment configuration:', err);
+      console.error('Failed to load enrolment configuration:', err);
       toast.error('Could not load venues and devices. Refresh the page to try again.');
     }
   }, []);
@@ -81,7 +79,7 @@ export default function Enroll() {
       });
       setRecentEnrollments(sorted.slice(0, 5));
     } catch (err) {
-      console.error('Failed to load recent enrollments:', err);
+      console.error('Failed to load recent enrolments:', err);
       toast.error('Could not refresh the recent enrolments list.');
     } finally {
       if (showLoader) setIsLoadingRecent(false);
@@ -114,7 +112,8 @@ export default function Enroll() {
           setFailReason('device');
           setCaptureState('failed');
           loadRecentEnrollments();
-        } else if (Date.now() - startedAt > ENROLL_WAIT_MS) {
+        } else if (student.enrollment_expired) {
+          // the server says no device collected the request in time (ENROLL_REQUEST_TTL_SECONDS)
           setFailReason('timeout');
           setCaptureState('failed');
         }
@@ -124,7 +123,7 @@ export default function Enroll() {
     };
     const timer = window.setInterval(check, POLL_MS);
     return () => { stopped = true; window.clearInterval(timer); };
-  }, [step, captureState, createdId, startedAt, loadRecentEnrollments, setCaptureState, setFailReason]);
+  }, [step, captureState, createdId, loadRecentEnrollments, setCaptureState, setFailReason]);
 
   const filteredDevices = useMemo(
     () => devices.filter((device) => String(device.venue_id) === String(venueId)),
@@ -154,7 +153,6 @@ export default function Enroll() {
     try {
       const created = await api.createStudent(studentNumber.trim(), name.trim(), Number(deviceId), courseName.trim(), email.trim());
       setCreatedId(created.id);
-      setStartedAt(Date.now());
       setFailReason('');
       // Reload from the API after saving so the recent list reflects persisted data.
       await loadRecentEnrollments();
@@ -173,7 +171,6 @@ export default function Enroll() {
     try {
       await api.reEnrollStudent(createdId);
       setFailReason('');
-      setStartedAt(Date.now());
       setCaptureState('capturing');
     } catch (err) {
       toast.error(err.message);
@@ -195,7 +192,7 @@ export default function Enroll() {
     loadRecentEnrollments();
   };
 
-  // "Re-enroll" in the recent list: the device picks the student up on its next poll.
+  // "Re-enrol" in the recent list: the device picks the student up on its next poll.
   const handleReenrollRow = async (student) => {
     try {
       await api.reEnrollStudent(student.id);
@@ -224,7 +221,7 @@ export default function Enroll() {
     <div className="space-y-8">
       <div className="flex items-center justify-between">
         <div className="space-y-1">
-          <h2 className="text-3xl font-bold tracking-tight">Student enrollment</h2>
+          <h2 className="text-3xl font-bold tracking-tight">Student enrolment</h2>
           <p className="text-muted-foreground">Capture a student's face on a venue device.</p>
         </div>
       </div>
@@ -370,7 +367,7 @@ export default function Enroll() {
                     {loading ? (
                       <><Loader2 size={16} className="mr-2 animate-spin" /> Starting...</>
                     ) : (
-                      'Start enrollment'
+                      'Start enrolment'
                     )}
                   </Button>
                 </form>
@@ -439,11 +436,11 @@ export default function Enroll() {
                       <CheckCircle2 size={32} />
                     </div>
                     <div className="space-y-2">
-                      <h3 className="text-xl font-bold">Enrollment Successful!</h3>
+                      <h3 className="text-xl font-bold">Enrolment successful!</h3>
                       <p className="text-muted-foreground text-sm">The student's face has been captured and stored on the device.</p>
                     </div>
                     <Button onClick={handleReset} className="gap-2">
-                      <UserPlus size={16} /> Enroll another student
+                      <UserPlus size={16} /> Enrol another student
                     </Button>
                   </div>
                 )}
@@ -457,7 +454,7 @@ export default function Enroll() {
                       <h3 className="text-xl font-bold">Capture Failed</h3>
                       <p className="text-muted-foreground text-sm">
                         {failReason === 'timeout'
-                          ? 'No device picked up the request within 10 minutes. Check that the device shows Online, then try again.'
+                          ? 'No device picked up the request in time. Check that the device shows Online, then try again.'
                           : 'The device could not capture a clear image. Please try again.'}
                       </p>
                     </div>
@@ -501,10 +498,10 @@ export default function Enroll() {
         </div>
       </div>
 
-      {/* Recent Enrollments */}
+      {/* Recent enrolments */}
       <Card className="border-none shadow-sm">
         <CardHeader>
-          <CardTitle className="text-lg font-semibold">Recent enrollments</CardTitle>
+          <CardTitle className="text-lg font-semibold">Recent enrolments</CardTitle>
         </CardHeader>
         <CardContent>
           {isLoadingRecent ? (
@@ -544,7 +541,7 @@ export default function Enroll() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
-                        <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => handleReenrollRow(s)}>Re-enroll</Button>
+                        <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => handleReenrollRow(s)}>Re-enrol</Button>
                       </div>
                     </TableCell>
                   </TableRow>
