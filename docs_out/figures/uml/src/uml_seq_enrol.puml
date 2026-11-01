@@ -1,0 +1,53 @@
+@startuml
+!include style.iuml
+autonumber
+actor Invigilator
+participant "SRS Console" as UI
+participant "Backend API" as API
+database "PostgreSQL" as DB
+participant "PC door\nprogram" as PC
+actor Student
+Invigilator -> UI : enter details, venue, device;\ntick consent; Start enrollment
+activate UI
+UI -> API : POST /api/students
+activate API
+API -> DB : INSERT students\n(enrollment_status = 'pending')
+API --> UI : 201 {id}
+deactivate API
+par console waits
+  loop every 3 s until enrolled / failed (max 10 min)
+    UI -> API : GET /api/students/{id}
+    API --> UI : enrollment_status
+  end
+else door program polls
+  loop every 3 s
+    PC -> API : GET /api/devices/{id}/pending-enrollments
+    activate API
+    API -> DB : pending students of this device (last 10 min)
+    API --> PC : [{studentId, studentNumber, name}]
+    deactivate API
+  end
+end
+activate PC
+PC -> PC : window shows "ENROLLING name"
+Student -> PC : stands at the marker, faces camera
+loop 5 samples, 0.25 s apart
+  PC -> PC : one face >= 90 px?\ndetect + embed
+end
+alt 5 good samples within 60 s
+  PC -> PC : average embeddings; save\ndata/embeddings/<number>.json + photo
+  PC -> API : PUT /api/students/{id}/enrollment-image (JPEG)
+  PC -> API : PUT /api/students/{id}/enrollment {status: enrolled}
+  activate API
+  API -> DB : UPDATE students SET enrollment_status = 'enrolled'
+  API --> PC : 200
+  deactivate API
+  UI --> Invigilator : "Enrolled"
+else time-out
+  PC -> API : PUT /api/students/{id}/enrollment {status: failed}
+  API -> DB : UPDATE students SET enrollment_status = 'failed'
+  UI --> Invigilator : "Failed" - Try again / Re-enroll
+end
+deactivate PC
+deactivate UI
+@enduml

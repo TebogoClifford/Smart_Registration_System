@@ -1,0 +1,28 @@
+@startuml
+!pragma layout smetana
+!include style.iuml
+hide empty description
+[*] --> Waiting : power on / find LCD,\nsend HELLO
+state Waiting : entry / LCD "Step up to scan"
+state Holding : entry / LCD "Hold still" + bar
+state Scanning : entry / send READY,\nLCD "Scanning face..."
+state Result {
+  state Granted : entry / "ACCESS GRANTED",\ntwo rising tones
+  state Denied : entry / "ACCESS DENIED",\none long low tone
+  state Already : entry / "ALREADY INSIDE",\ntwo short beeps
+}
+state Leaving : entry / LCD "Next student"
+state Testing : LCD, buzzer and\ndistance tests
+Waiting --> Holding : distance in 25-50 cm
+Holding --> Waiting : out of window > 200 ms
+Holding --> Scanning : held 1 s / beep
+Scanning --> Granted : G
+Scanning --> Denied : D
+Scanning --> Already : A
+Scanning --> Waiting : student left / send AWAY
+Scanning --> Waiting : no answer in 6 s /\nLCD "No answer"
+Result --> Leaving : after 3 s
+Leaving --> Waiting : distance > 65 cm
+Waiting --> Testing : T command from PC
+Testing --> Waiting : TX or after 120 s
+@enduml
