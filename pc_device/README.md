@@ -5,10 +5,11 @@
 | What happens | Where you see it |
 |---|---|
 | An invigilator presses **Start enrollment** on the web console | The PC window shows *ENROLLING name*, captures 5 shots when one face is close enough, then the Enroll page flips to **Enrolled** |
+| The new face looks like a student already stored on this PC | Enrolment pauses and a **Possible duplicate face** window shows both faces, their embeddings as colour strips and the similarity. Press **Same person · reject enrolment** (reported as *failed*) or **Different people · enrol anyway**. Closing the window or **Skip** = reject |
 | A student walks up | **GRANTED name – seat N** if they have a seat in this venue's current exam session (09:00 before noon, 13:00 after), otherwise **DENIED** |
 | Every decision | Appears on the Dashboard; queued on disk while offline and uploaded later (never twice) |
 
-Face embeddings stay on this PC in `data/faces/`. The backend only stores the result and one photo for re-enrolment.
+Face embeddings stay on this PC in `data/embeddings/` (photos in `data/photos/`). The backend only stores the result and one photo for re-enrolment.
 
 ## Set up (once)
 ```
@@ -70,3 +71,8 @@ Serial messages (9600 baud, one per line) are listed at the top of `srs_door.ino
 * Matching uses SFace cosine similarity with threshold 0.40 (`MATCH_THRESHOLD` in `face_engine.py`). Raise it if strangers are ever accepted, lower it if enrolled students are denied.
 * Each face is compared with *every* face stored on this PC first, and only then checked against the seat list, so a stranger cannot be "closest" to a seated student by elimination.
 * The same student is logged at most once every 15 seconds.
+* **Duplicate check at enrolment:** the averaged new embedding is compared with every face stored on this PC (except the
+  student's own, so re-enrolling is fine). Anything at or above `DUPLICATE_THRESHOLD` (0.40, the same as the door, in
+  `face_engine.py`) needs a person's decision. What was compared and decided is saved in the new
+  `data/embeddings/<number>.json` under `duplicateCheck`. Only faces on *this* PC are checked: embeddings never leave it.
+* `python srs_pc_app.py --check` also lists look-alike pairs among the faces already stored.
