@@ -10,18 +10,18 @@ stateDiagram-v2
     Leaving : Leaving
     Leaving : entry / LCD "Next student"
     Testing : Testing
-    Testing : LCD, buzzer and distance tests
+    Testing : LCD and distance tests
     state Result {
         Granted : Granted
-        Granted : entry / "ACCESS GRANTED", two rising tones
+        Granted : entry / "ACCESS GRANTED"
         Denied : Denied
-        Denied : entry / "ACCESS DENIED", one long low tone
+        Denied : entry / "ACCESS DENIED"
         Already : Already
-        Already : entry / "ALREADY INSIDE", two short beeps
+        Already : entry / "ALREADY INSIDE"
     }
     Waiting --> Holding : distance in 25-50 cm
     Holding --> Waiting : out of window > 200 ms
-    Holding --> Scanning : held 1 s / beep
+    Holding --> Scanning : held 1 s
     Scanning --> Granted : G
     Scanning --> Denied : D
     Scanning --> Already : A

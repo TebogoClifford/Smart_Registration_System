@@ -12,7 +12,7 @@ node "USB webcam\n<<device>>" as CAM
 node "Arduino Mega 2560\n<<device>>" as ARD {
   artifact "srs_door.ino v2" as A4
 }
-node "HC-SR04 + 16x2 LCD + buzzer\n<<device>>" as IO
+node "HC-SR04 + 16x2 LCD\n<<device>>" as IO
 node "Staff computer\n<<device>>" as BR {
   node "Web browser" as WB
 }
@@ -30,7 +30,7 @@ cloud "Neon" as NE {
 cloud "Brevo" as BV
 CAM -- PCN : USB video
 ARD -- PCN : USB serial\n9600 baud
-IO -- ARD : GPIO D8-D10,\nI2C
+IO -- ARD : GPIO D9-D10,\nI2C
 PCN -- RD : HTTPS/JSON\nX-Device-Key
 WB -- VC : HTTPS
 WB -- RD : HTTPS/JSON\nJWT

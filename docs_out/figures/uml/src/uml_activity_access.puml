@@ -17,7 +17,7 @@ repeat
     :LCD "Hold still";
   endswitch
 repeat while (held in window for 1 s?) is ([no]) not ([yes])
-:Beep and send READY;
+:Send READY to the PC;
 |PC door program|
 :Capture webcam frame;
 :Detect largest face (YuNet)\nand compute embedding (SFace);
@@ -38,7 +38,7 @@ endif
 fork
   :Send G / D / A\nto the Arduino;
   |Arduino door unit|
-  :Show result on LCD\nand beep;
+  :Show result on LCD;
   |Student|
   if (decision = granted?) then ([yes])
     :Enter the venue;

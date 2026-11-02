@@ -20,16 +20,16 @@ sequenceDiagram
     FS-->>PC: (studentId, similarity)
     alt similarity < 0.40
         PC->>A: D
-        A-->>S: ACCESS DENIED (low tone)
+        A-->>S: ACCESS DENIED
     else already inside this session
         PC->>A: A
-        A-->>S: ALREADY INSIDE (two beeps)
+        A-->>S: ALREADY INSIDE
     else session ended
         PC->>A: D
-        A-->>S: ACCESS DENIED (low tone)
+        A-->>S: ACCESS DENIED
     else recognised
         PC->>A: G
-        A-->>S: ACCESS GRANTED (two rising tones)
+        A-->>S: ACCESS GRANTED
         Note right of PC: PC window shows seat N + module,<br/>or "no exam seat in this session"
     end
     deactivate A
